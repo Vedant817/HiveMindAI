@@ -38,6 +38,9 @@ class SwarmRuntime:
     async def run_goal(self, goal: str, progress: ProgressCallback | None = None) -> dict:
         await _publish(progress, {"phase": "planning", "status": "running", "message": "PM agent is creating the task DAG."})
         dag = await self.pm.create_plan(goal)
+        for task in dag.tasks:
+            task.metadata.setdefault("dag_id", dag.dag_id)
+        await self.store.upsert("TaskDAGs", dag.to_dict())
         await _publish(
             progress,
             {
@@ -49,33 +52,7 @@ class SwarmRuntime:
         )
         history: list[dict] = []
         await self._persist_tasks(dag)
-
-        while True:
-            ready = dag.ready_tasks()
-            if not ready:
-                await self._block_pending_tasks(dag, progress)
-                break
-            for task in ready:
-                result = await self._run_task(task, progress)
-                task.status = "done" if result["gate"] == "auto_execute" and result["validated"].status == "done" else "blocked"
-                await self._persist_task(dag.dag_id, task)
-                await _publish(
-                    progress,
-                    {
-                        "phase": "gate",
-                        "status": task.status,
-                        "message": f"{task.assigned_to} task {task.status}: {task.title}",
-                        "task": task.to_dict(),
-                        "gate": result["gate"],
-                    },
-                )
-                history.extend(
-                    [
-                        result["input"].model_dump(),
-                        result["executed"].model_dump(),
-                        result["validated"].model_dump(),
-                    ]
-                )
+        await self._execute_dag(dag, history, progress)
 
         await _publish(progress, {"phase": "memory", "status": "running", "message": "Persisting DAG and execution history."})
         await self.store.upsert("TaskDAGs", dag.to_dict())
@@ -105,6 +82,123 @@ class SwarmRuntime:
             "validated": validated.model_dump(),
             "gate": gate_result,
         }
+
+    async def process_queued_tickets(
+        self,
+        queue: str | None = None,
+        max_messages: int = 10,
+        progress: ProgressCallback | None = None,
+    ) -> dict:
+        messages = await self.pm.bus.receive(queue=queue, max_messages=max_messages)
+        executions = []
+        for msg in messages:
+            await _publish(
+                progress,
+                {
+                    "phase": "ticket-execution",
+                    "status": "running",
+                    "message": f"Executing queued ticket: {msg.payload.get('title', msg.task_id)}",
+                },
+            )
+            executions.append(await self.process_message(msg))
+        return {"count": len(executions), "executions": executions}
+
+    async def resume_approval(
+        self,
+        approval_id: str,
+        approved: bool,
+        token: str | None = None,
+        progress: ProgressCallback | None = None,
+    ) -> dict:
+        resolution = await self.gate.resolve(approval_id, approved=approved, token=token)
+        if "error" in resolution:
+            return resolution
+
+        context = resolution.get("context", {})
+        task_payload = resolution.get("task", {})
+        dag_id = context.get("dag_id") or task_payload.get("metadata", {}).get("dag_id") or task_payload.get("dag_id")
+        task_id = context.get("task_id") or task_payload.get("task_id")
+        if not dag_id or not task_id:
+            return {**resolution, "resumed": False, "reason": "approval was not tied to a persisted DAG task"}
+
+        dag_data = await self.store.get("TaskDAGs", dag_id)
+        if not dag_data:
+            return {**resolution, "resumed": False, "reason": f"DAG {dag_id} was not found"}
+
+        dag = TaskDAG.from_dict(dag_data)
+        target = next((task for task in dag.tasks if task.task_id == task_id), None)
+        if target is None:
+            return {**resolution, "resumed": False, "reason": f"Task {task_id} was not found"}
+
+        target.metadata.update({"approval_id": approval_id, "approved_by_human": approved})
+        if not approved:
+            target.status = "blocked"
+            target.metadata["blocked_reason"] = "Human rejected the approval request."
+            await self._block_pending_tasks(dag, progress)
+            await self.store.upsert("TaskDAGs", dag.to_dict())
+            await self._persist_tasks(dag)
+            return {**resolution, "resumed": True, "dag": dag.to_dict(), "complete": False}
+
+        target.status = "done"
+        target.metadata.pop("gate", None)
+        target.metadata.pop("blocked_reason", None)
+        await self.store.upsert("TaskDAGs", dag.to_dict())
+        await self._persist_task(dag.dag_id, target)
+        history = [resolution.get("message", {})]
+        await self._execute_dag(dag, history, progress)
+        await self.store.upsert("TaskDAGs", dag.to_dict())
+        await self._persist_tasks(dag)
+        return {
+            **resolution,
+            "resumed": True,
+            "dag": dag.to_dict(),
+            "history": history,
+            "complete": all(task.status == "done" for task in dag.tasks),
+        }
+
+    async def _execute_dag(self, dag: TaskDAG, history: list[dict], progress: ProgressCallback | None = None) -> None:
+        while True:
+            ready = dag.ready_tasks()
+            if not ready:
+                if not self._has_pending_approval(dag):
+                    await self._block_pending_tasks(dag, progress)
+                break
+            for task in ready:
+                result = await self._run_task(dag, task, progress)
+                if result["gate"] == "auto_execute" and result["validated"].status == "done":
+                    task.status = "done"
+                    task.metadata.pop("gate", None)
+                    task.metadata.pop("blocked_reason", None)
+                else:
+                    task.status = "blocked"
+                    task.metadata["gate"] = result["gate"]
+                    task.metadata["blocked_reason"] = (
+                        "Waiting for human approval."
+                        if result["gate"] == "awaiting_human"
+                        else "Validation did not produce an auto-executable result."
+                    )
+                await self.store.upsert("TaskDAGs", dag.to_dict())
+                await self._persist_task(dag.dag_id, task)
+                await _publish(
+                    progress,
+                    {
+                        "phase": "gate",
+                        "status": task.status,
+                        "message": f"{task.assigned_to} task {task.status}: {task.title}",
+                        "task": task.to_dict(),
+                        "gate": result["gate"],
+                    },
+                )
+                history.extend(
+                    [
+                        result["input"].model_dump(),
+                        result["executed"].model_dump(),
+                        result["validated"].model_dump(),
+                    ]
+                )
+
+    def _has_pending_approval(self, dag: TaskDAG) -> bool:
+        return any(task.status == "blocked" and task.metadata.get("gate") == "awaiting_human" for task in dag.tasks)
 
     async def _persist_task(self, dag_id: str, task: TaskNode) -> None:
         await self.store.upsert("Tasks", {"dag_id": dag_id, **task.to_dict()})
@@ -139,7 +233,7 @@ class SwarmRuntime:
                 },
             )
 
-    async def _run_task(self, task: TaskNode, progress: ProgressCallback | None = None) -> dict:
+    async def _run_task(self, dag: TaskDAG, task: TaskNode, progress: ProgressCallback | None = None) -> dict:
         task.status = "running"
         await _publish(
             progress,
@@ -153,6 +247,7 @@ class SwarmRuntime:
         msg = AgentMessage(
             type="execute",
             payload=task.to_dict(),
+            task_id=task.task_id,
             assigned_to=task.assigned_to,
             confidence=task.confidence,
             jira_ticket_id=task.jira_ticket_id,
@@ -179,7 +274,7 @@ class SwarmRuntime:
                 "confidence": validated.confidence,
             },
         )
-        gate_result = await self.gate.evaluate(validated)
+        gate_result = await self.gate.evaluate(validated, context={"dag_id": dag.dag_id, "task_id": task.task_id})
         if gate_result == "auto_execute":
             await self.comms.on_task_complete(validated)
         return {"input": msg, "executed": executed, "validated": validated, "gate": gate_result}

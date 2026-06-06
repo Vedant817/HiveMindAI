@@ -5,6 +5,7 @@ import uuid
 
 from shared.message_schema import AgentMessage
 from shared.config import is_real_value, require_or_fallback
+from shared.security import sign_token
 
 
 class TeamsBot:
@@ -14,6 +15,8 @@ class TeamsBot:
 
     async def send_approval_card(self, msg: AgentMessage) -> str:
         approval_id = str(uuid.uuid4())
+        token = sign_token(approval_id)
+        token_query = f"?token={token}" if token else ""
         if not is_real_value(self._webhook) or not is_real_value(self._base_url):
             require_or_fallback("Microsoft Teams", "set TEAMS_WEBHOOK_URL and APP_BASE_URL")
             return approval_id
@@ -38,12 +41,12 @@ class TeamsBot:
                 {
                     "@type": "HttpPOST",
                     "name": "Approve",
-                    "target": f"{self._base_url}/approval/{approval_id}/approve",
+                    "target": f"{self._base_url}/approval/{approval_id}/approve{token_query}",
                 },
                 {
                     "@type": "HttpPOST",
                     "name": "Reject",
-                    "target": f"{self._base_url}/approval/{approval_id}/reject",
+                    "target": f"{self._base_url}/approval/{approval_id}/reject{token_query}",
                 },
             ],
         }

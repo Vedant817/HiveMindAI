@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 from collections import defaultdict, deque
 import os
+from pathlib import Path
 
 from shared.message_schema import AgentMessage
-from shared.config import is_real_value, require_or_fallback
+from shared.config import ROOT_DIR, env_str, is_real_value, require_or_fallback
 
 
 class ServiceBusClient:
@@ -32,7 +33,7 @@ class ServiceBusClient:
             return
         if not is_real_value(self._conn):
             require_or_fallback("Azure Service Bus", "set AZURE_SERVICE_BUS_CONNECTION_STRING")
-            self._queues[queue].append(msg)
+            self._send_local(queue, msg)
             return
         try:
             from azure.servicebus import ServiceBusMessage
@@ -43,7 +44,7 @@ class ServiceBusClient:
                     await sender.send_messages(ServiceBusMessage(msg.model_dump_json()))
         except Exception:
             require_or_fallback("Azure Service Bus", "connection failed")
-            self._queues[queue].append(msg)
+            self._send_local(queue, msg)
 
     async def receive(self, queue: str | None = None, max_messages: int = 10) -> list[AgentMessage]:
         queue = queue or self.default_task_queue
@@ -77,13 +78,38 @@ class ServiceBusClient:
             require_or_fallback("Azure Service Bus", "connection failed")
             return self._receive_local(queue, max_messages)
 
+    def _send_local(self, queue: str, msg: AgentMessage) -> None:
+        self._queues[queue].append(msg)
+        path = self._queue_path(queue)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(msg.model_dump_json() + "\n")
+
     def _receive_local(self, queue: str, max_messages: int) -> list[AgentMessage]:
+        path = self._queue_path(queue)
+        if path.exists():
+            lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            selected = lines[:max_messages]
+            remaining = lines[max_messages:]
+            temp_path = path.with_suffix(f"{path.suffix}.tmp")
+            temp_path.write_text("\n".join(remaining) + ("\n" if remaining else ""), encoding="utf-8")
+            temp_path.replace(path)
+            self._queues[queue].clear()
+            return [AgentMessage.model_validate_json(line) for line in selected]
+
         result: list[AgentMessage] = []
         for _ in range(max_messages):
             if not self._queues[queue]:
                 break
             result.append(self._queues[queue].popleft())
         return result
+
+    def _queue_path(self, queue: str) -> Path:
+        root = Path(env_str("LOCAL_STATE_DIR", str(ROOT_DIR / "local_state")))
+        if not root.is_absolute():
+            root = ROOT_DIR / root
+        safe_queue = "".join(char if char.isalnum() or char in "._-" else "-" for char in queue) or "queue"
+        return root / "queues" / f"{safe_queue}.jsonl"
 
     async def drain(self, queue: str | None = None) -> list[AgentMessage]:
         await asyncio.sleep(0)

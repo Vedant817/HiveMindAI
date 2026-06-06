@@ -10,7 +10,7 @@ from agents.meeting_agent import MeetingAgent
 from agents.summary_agent import SummaryAgent
 from metrics.swarm_metrics import project_health
 from orchestrator.swarm_runtime import SwarmRuntime
-from shared.config import config_report, demo_defaults
+from shared.config import config_report, demo_defaults, env_bool
 
 
 def demo_mode(report: dict) -> str:
@@ -35,6 +35,11 @@ async def run_pitch_demo(payload: dict | None = None) -> dict:
 
     swarm_result = await runtime.run_goal(goal)
     meeting_result = await meeting.process_transcript(transcript)
+    ticket_executions = (
+        await runtime.process_queued_tickets(max_messages=meeting_result["count"])
+        if env_bool("DEMO_EXECUTE_MEETING_TICKETS", True)
+        else {"count": 0, "executions": []}
+    )
     debate_result = await debate.run_debate(question)
     task_rows = swarm_result["dag"]["tasks"]
     executive_summary = await summary.generate(task_rows)
@@ -44,6 +49,7 @@ async def run_pitch_demo(payload: dict | None = None) -> dict:
         "goal": goal,
         "meeting": meeting_result,
         "swarm": swarm_result,
+        "ticket_executions": ticket_executions,
         "debate": debate_result,
         "summary": executive_summary,
         "metrics": {
@@ -82,6 +88,11 @@ async def run_pitch_demo_stream(payload: dict | None = None) -> AsyncIterator[st
             await publish({"type": "stage", "phase": "meeting", "status": "running", "message": "Meeting agent is extracting Jira-ready work items."})
             meeting_result = await meeting.process_transcript(transcript)
             await publish({"type": "stage", "phase": "meeting", "status": "complete", "message": f"Meeting agent created {meeting_result['count']} local or Jira tickets.", "tickets": meeting_result["tickets"]})
+            ticket_executions = {"count": 0, "executions": []}
+            if env_bool("DEMO_EXECUTE_MEETING_TICKETS", True):
+                await publish({"type": "stage", "phase": "ticket-execution", "status": "running", "message": "Queued meeting tickets are being executed by the swarm."})
+                ticket_executions = await runtime.process_queued_tickets(max_messages=meeting_result["count"], progress=publish)
+                await publish({"type": "stage", "phase": "ticket-execution", "status": "complete", "message": f"Executed {ticket_executions['count']} queued meeting tickets."})
 
             await publish({"type": "stage", "phase": "debate", "status": "running", "message": "Specialist agents are debating the architecture decision."})
             debate_result = await debate.run_debate(question)
@@ -96,6 +107,7 @@ async def run_pitch_demo_stream(payload: dict | None = None) -> AsyncIterator[st
                 "goal": goal,
                 "meeting": meeting_result,
                 "swarm": swarm_result,
+                "ticket_executions": ticket_executions,
                 "debate": debate_result,
                 "summary": executive_summary,
                 "metrics": {

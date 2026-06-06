@@ -30,6 +30,7 @@ const phaseDefinitions = [
   { key: "memory", label: "Memory", detail: "Persist DAG and trace", icon: "database" },
   { key: "reflection", label: "Reflection", detail: "Review run quality", icon: "sparkles" },
   { key: "meeting", label: "Tickets", detail: "Extract Jira-ready actions", icon: "ticket" },
+  { key: "ticket-execution", label: "Ticket execution", detail: "Run queued meeting actions", icon: "list-checks" },
   { key: "debate", label: "Debate", detail: "Score specialist proposals", icon: "messages-square" },
   { key: "summary", label: "Summary", detail: "Prepare manager report", icon: "file-text" },
 ];
