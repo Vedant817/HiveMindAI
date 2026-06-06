@@ -1,0 +1,12 @@
+{
+  "goal": "Turn the product sync into a working project dashboard before Friday.",
+  "transcript": "Action: build a project health dashboard before Friday.\nNeed Jira tickets for ingestion, validation, and stakeholder summary.\nCreate a low-confidence approval path for risky deployment decisions.\nFix duplicated context sharing between executor and validator agents.",
+  "question": "Should the swarm use Redis pub/sub or Service Bus for cross-agent status updates?",
+  "story": [
+    "A meeting transcript is converted into Jira-ready tickets.",
+    "The PM agent decomposes the business goal into a dependency DAG.",
+    "Executor and Validator agents process each task and record confidence.",
+    "Low-confidence work is routed to human approval; high-confidence work auto-executes.",
+    "The swarm reflects on the run and produces an executive summary."
+  ]
+}

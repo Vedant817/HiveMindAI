@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>HiveMindAI Swarm Demo</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              paper: "#f7f8f5",
+              ink: "#202124",
+              muted: "#667085",
+              line: "#d6d9d2",
+              panel: "#ffffff",
+              teal: "#0f766e",
+              navy: "#26324a",
+              amber: "#b45309",
+              green: "#15803d",
+              rose: "#be123c",
+              violet: "#6d5bd0",
+            },
+            boxShadow: {
+              soft: "0 14px 42px rgba(39, 47, 64, 0.08)",
+            },
+          },
+        },
+      };
+    </script>
+  </head>
+  <body class="min-w-80 bg-paper text-ink antialiased">
+    <header class="border-b border-line bg-panel">
+      <div class="mx-auto flex w-full max-w-[1500px] flex-col gap-4 px-4 py-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
+        <div class="min-w-0">
+          <p class="text-xs font-bold uppercase tracking-normal text-teal">Hackathon demo console</p>
+          <h1 class="mt-1 text-2xl font-bold leading-tight sm:text-3xl">HiveMindAI Agent Swarm</h1>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="inline-flex min-h-9 items-center rounded-full border border-line bg-paper px-3 text-sm font-semibold text-muted" id="modePill">Checking configuration</span>
+          <span class="inline-flex min-h-9 items-center rounded-full border border-line bg-paper px-3 text-sm font-semibold text-muted" id="runStatePill">Idle</span>
+        </div>
+      </div>
+    </header>
+
+    <main class="mx-auto grid w-full max-w-[1500px] gap-4 px-4 py-4 sm:px-6 lg:grid-cols-[400px_minmax(0,1fr)]">
+      <aside class="grid min-w-0 content-start gap-4 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto">
+        <section class="rounded-lg border border-line bg-panel p-4 shadow-soft">
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <h2 class="text-lg font-bold leading-tight">Run a prompt</h2>
+              <p class="mt-1 text-sm leading-relaxed text-muted">Enter a goal and transcript. The run stream shows what each agent is doing while the backend works.</p>
+            </div>
+            <span class="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-teal text-white"><i data-lucide="network" class="h-5 w-5"></i></span>
+          </div>
+
+          <div class="mt-4 grid gap-3">
+            <label class="grid gap-1.5 text-sm font-bold">
+              <span>Business goal</span>
+              <textarea class="min-h-24 w-full resize-y rounded-md border border-line bg-white p-3 text-sm font-normal leading-relaxed text-ink outline-none focus:border-teal focus:ring-2 focus:ring-teal/20" id="goalInput" rows="4" placeholder="Loading demo goal..."></textarea>
+            </label>
+            <label class="grid gap-1.5 text-sm font-bold">
+              <span>Meeting transcript</span>
+              <textarea class="min-h-32 w-full resize-y rounded-md border border-line bg-white p-3 text-sm font-normal leading-relaxed text-ink outline-none focus:border-teal focus:ring-2 focus:ring-teal/20" id="transcriptInput" rows="6" placeholder="Loading demo transcript..."></textarea>
+            </label>
+          </div>
+
+          <div class="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
+            <button class="inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-teal px-4 text-sm font-bold text-white transition hover:bg-teal/90 disabled:cursor-wait disabled:opacity-60" id="runDemoButton" type="button">
+              <i data-lucide="play" class="h-4 w-4"></i>
+              <span>Run live demo</span>
+            </button>
+            <button class="inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-navy px-4 text-sm font-bold text-white transition hover:bg-navy/90 disabled:cursor-wait disabled:opacity-60" id="configButton" type="button">
+              <i data-lucide="shield-check" class="h-4 w-4"></i>
+              <span>Check config</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="rounded-lg border border-line bg-panel p-4 shadow-soft">
+          <div class="mb-3 flex items-center justify-between gap-3">
+            <h2 class="text-lg font-bold leading-tight">Internal working</h2>
+            <span class="text-xs font-bold uppercase tracking-normal text-muted" id="progressPercent">0%</span>
+          </div>
+          <div class="h-2 overflow-hidden rounded-full bg-paper">
+            <div class="h-full w-0 rounded-full bg-teal transition-all duration-500" id="progressBar"></div>
+          </div>
+          <div class="mt-4 grid gap-2" id="phaseView"></div>
+        </section>
+
+        <section class="rounded-lg border border-line bg-panel p-4 shadow-soft">
+          <div class="mb-3 flex items-center justify-between gap-3">
+            <h2 class="text-lg font-bold leading-tight">Live event feed</h2>
+            <span class="inline-flex min-h-7 items-center rounded-full bg-paper px-2.5 text-xs font-bold text-muted" id="eventCount">0 events</span>
+          </div>
+          <div class="max-h-72 overflow-y-auto rounded-md border border-line bg-[#fbfcfa] p-2" id="eventFeed"></div>
+        </section>
+      </aside>
+
+      <section class="grid min-w-0 gap-4">
+        <section class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="Swarm overview">
+          <div class="rounded-lg border border-line bg-panel p-4 shadow-soft">
+            <span class="block text-xs font-bold uppercase tracking-normal text-muted">Health</span>
+            <strong class="mt-2 block text-3xl leading-none" id="healthMetric">--</strong>
+          </div>
+          <div class="rounded-lg border border-line bg-panel p-4 shadow-soft">
+            <span class="block text-xs font-bold uppercase tracking-normal text-muted">Tasks</span>
+            <strong class="mt-2 block text-3xl leading-none" id="taskMetric">--</strong>
+          </div>
+          <div class="rounded-lg border border-line bg-panel p-4 shadow-soft">
+            <span class="block text-xs font-bold uppercase tracking-normal text-muted">Tickets</span>
+            <strong class="mt-2 block text-3xl leading-none" id="ticketMetric">--</strong>
+          </div>
+          <div class="rounded-lg border border-line bg-panel p-4 shadow-soft">
+            <span class="block text-xs font-bold uppercase tracking-normal text-muted">Agents</span>
+            <strong class="mt-2 block text-3xl leading-none" id="agentMetric">--</strong>
+          </div>
+        </section>
+
+        <section class="rounded-lg border border-line bg-panel p-4 shadow-soft">
+          <div class="mb-4 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <p class="text-xs font-bold uppercase tracking-normal text-teal">Prompt overview</p>
+              <h2 class="text-xl font-bold leading-tight">What the swarm will process</h2>
+            </div>
+            <span class="text-sm font-semibold text-muted" id="promptStats">Waiting for input</span>
+          </div>
+          <div class="grid gap-3 xl:grid-cols-3" id="promptOverview"></div>
+        </section>
+
+        <section class="rounded-lg border border-line bg-panel p-4 shadow-soft">
+          <div class="mb-4 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <p class="text-xs font-bold uppercase tracking-normal text-teal">Swarm architecture</p>
+              <h2 class="text-xl font-bold leading-tight">Live pipeline map</h2>
+            </div>
+            <span class="text-sm font-semibold text-muted" id="activePhaseLabel">No active phase</span>
+          </div>
+          <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-6" id="pipelineMap"></div>
+        </section>
+
+        <section class="grid min-w-0 gap-4 xl:grid-cols-2">
+          <article class="rounded-lg border border-line bg-panel p-4 shadow-soft">
+            <div class="mb-4">
+              <p class="text-xs font-bold uppercase tracking-normal text-teal">Execution DAG</p>
+              <h2 class="text-xl font-bold leading-tight">Planned tasks</h2>
+            </div>
+            <div id="dagView" class="flex min-h-56 items-center justify-center rounded-md border border-dashed border-line p-4 text-center text-muted">Run the demo to render the task graph.</div>
+          </article>
+
+          <article class="rounded-lg border border-line bg-panel p-4 shadow-soft">
+            <div class="mb-4">
+              <p class="text-xs font-bold uppercase tracking-normal text-teal">Meeting extraction</p>
+              <h2 class="text-xl font-bold leading-tight">Jira-ready tickets</h2>
+            </div>
+            <div id="ticketView" class="flex min-h-56 items-center justify-center rounded-md border border-dashed border-line p-4 text-center text-muted">Tickets will appear here.</div>
+          </article>
+        </section>
+
+        <section class="grid min-w-0 gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+          <article class="rounded-lg border border-line bg-panel p-4 shadow-soft">
+            <div class="mb-4">
+              <p class="text-xs font-bold uppercase tracking-normal text-teal">Agent trace</p>
+              <h2 class="text-xl font-bold leading-tight">Execution timeline</h2>
+            </div>
+            <div id="timelineView" class="flex min-h-64 items-center justify-center rounded-md border border-dashed border-line p-4 text-center text-muted">Agent messages will appear here.</div>
+          </article>
+
+          <article class="rounded-lg border border-line bg-panel p-4 shadow-soft">
+            <div class="mb-4">
+              <p class="text-xs font-bold uppercase tracking-normal text-teal">Decision validation</p>
+              <h2 class="text-xl font-bold leading-tight">Multi-agent debate</h2>
+            </div>
+            <div id="debateView" class="flex min-h-64 items-center justify-center rounded-md border border-dashed border-line p-4 text-center text-muted">Debate output will appear here.</div>
+          </article>
+        </section>
+
+        <section class="grid min-w-0 gap-4 xl:grid-cols-[0.9fr_1.1fr]">
+          <article class="rounded-lg border border-line bg-panel p-4 shadow-soft">
+            <div class="mb-4">
+              <p class="text-xs font-bold uppercase tracking-normal text-teal">Manager view</p>
+              <h2 class="text-xl font-bold leading-tight">Executive summary</h2>
+            </div>
+            <pre id="summaryView" class="min-h-64 overflow-auto whitespace-pre-wrap rounded-md bg-navy p-4 font-mono text-sm leading-relaxed text-white">Run the demo to generate a concise project report.</pre>
+          </article>
+
+          <article class="rounded-lg border border-line bg-panel p-4 shadow-soft">
+            <div class="mb-4">
+              <p class="text-xs font-bold uppercase tracking-normal text-teal" id="configEyebrow">Stack readiness</p>
+              <h2 class="text-xl font-bold leading-tight" id="configTitle">Configuration check</h2>
+            </div>
+            <div id="configView" class="grid min-h-64 gap-2 sm:grid-cols-2 2xl:grid-cols-3"></div>
+          </article>
+        </section>
+      </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

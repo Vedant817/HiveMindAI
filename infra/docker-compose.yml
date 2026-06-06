@@ -1,0 +1,22 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  orchestrator:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.agent
+    env_file: ../.env
+    depends_on:
+      - redis
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../workspace:/app/workspace
+      - ../local_state:/app/local_state
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - APP_HOST=0.0.0.0
+      - APP_PORT=8000
