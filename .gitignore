@@ -1,0 +1,35 @@
+.env
+.env.*
+!.env.example
+!.env.local.example
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+workspace/
+local_state/
+screenshots/
+*.log
+
+# Local tool/runtime state
+.antigravitycli/
+.codex/
+
+# Reference/planning material not needed in final submission
+symphony/
+ExecutionSummary*.md
+Phase*.md
+phase*.md
+Plan*.md
+plan*.md
+*Plan*.md
+*plan*.md
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
