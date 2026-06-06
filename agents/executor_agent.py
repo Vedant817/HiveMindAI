@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from shared.artifacts import write_task_artifacts
 from shared.message_schema import AgentMessage
 from shared.llm_client import LLMClient
 from shared.config import executor_confidence_cap, executor_confidence_floor
@@ -29,7 +30,10 @@ class ExecutorAgent:
         if isinstance(generated, dict):
             try:
                 output = generated.get("output", generated)
+                if not isinstance(output, dict):
+                    output = {"summary": str(output), "details": str(output)}
                 confidence = float(generated.get("confidence", msg.confidence))
+                output = self._with_artifacts(msg.payload, output)
                 return AgentMessage(
                     type="complete",
                     payload={**msg.payload, "output": output},
@@ -51,6 +55,7 @@ class ExecutorAgent:
             "completed_at": datetime.now(timezone.utc).isoformat(),
             "artifacts": msg.payload.get("artifacts", []),
         }
+        output = self._with_artifacts(msg.payload, output)
         confidence = min(executor_confidence_cap(), max(executor_confidence_floor(), msg.confidence))
         return AgentMessage(
             type="complete",
@@ -61,3 +66,9 @@ class ExecutorAgent:
             parent_task_id=msg.task_id,
             jira_ticket_id=msg.jira_ticket_id,
         )
+
+    def _with_artifacts(self, task: dict, output: dict) -> dict:
+        artifacts = list(output.get("artifacts") or [])
+        artifacts.extend(write_task_artifacts(task, output))
+        output["artifacts"] = sorted({str(path) for path in artifacts})
+        return output

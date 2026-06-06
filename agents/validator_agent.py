@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from shared.artifacts import artifact_exists
 from shared.message_schema import AgentMessage
 from shared.llm_client import LLMClient
 from shared.config import confidence_threshold
@@ -24,7 +25,8 @@ class ValidatorAgent:
                     issues = [raw_issues]
                 else:
                     issues = [str(issue) for issue in raw_issues]
-                passed = str(verdict.get("verdict", "")).upper() == "PASS"
+                issues.extend(self._deterministic_issues(msg))
+                passed = str(verdict.get("verdict", "")).upper() == "PASS" and not issues
                 confidence = float(verdict.get("confidence", msg.confidence))
                 return AgentMessage(
                     type="validate" if passed else "escalate",
@@ -38,15 +40,7 @@ class ValidatorAgent:
             except (TypeError, ValueError):
                 pass
 
-        issues: list[str] = []
-        output = msg.payload.get("output")
-        if not output:
-            issues.append("Executor did not provide an output payload.")
-        if not msg.payload.get("title"):
-            issues.append("Task title is missing.")
-        if "security" in str(msg.payload).lower() and msg.confidence < confidence_threshold():
-            issues.append("Security-sensitive task needs human review.")
-
+        issues = self._deterministic_issues(msg)
         passed = not issues
         return AgentMessage(
             type="validate" if passed else "escalate",
@@ -63,3 +57,25 @@ class ValidatorAgent:
             parent_task_id=msg.task_id,
             jira_ticket_id=msg.jira_ticket_id,
         )
+
+    def _deterministic_issues(self, msg: AgentMessage) -> list[str]:
+        issues: list[str] = []
+        output = msg.payload.get("output")
+        if not isinstance(output, dict) or not output:
+            issues.append("Executor did not provide an output payload.")
+            output = {}
+        if not msg.payload.get("title"):
+            issues.append("Task title is missing.")
+        if not str(output.get("summary", "")).strip():
+            issues.append("Executor output is missing a summary.")
+        if not str(output.get("details", "")).strip():
+            issues.append("Executor output is missing implementation details.")
+        artifacts = output.get("artifacts") or []
+        if not artifacts:
+            issues.append("Executor did not produce any verifiable artifacts.")
+        for artifact in artifacts:
+            if not artifact_exists(str(artifact)):
+                issues.append(f"Artifact does not exist or is outside the workspace: {artifact}")
+        if "security" in str(msg.payload).lower() and msg.confidence < confidence_threshold():
+            issues.append("Security-sensitive task needs human review.")
+        return issues

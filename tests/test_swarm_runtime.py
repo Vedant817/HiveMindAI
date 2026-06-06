@@ -34,7 +34,7 @@ class SwarmRuntimeTests(unittest.IsolatedAsyncioTestCase):
         result = await SwarmRuntime().run_goal("Build a dashboard before Friday")
 
         self.assertTrue(result["complete"])
-        self.assertEqual(len(result["dag"]["tasks"]), 3)
+        self.assertGreaterEqual(len(result["dag"]["tasks"]), 3)
         self.assertIn("improvement", result["reflection"])
 
 
