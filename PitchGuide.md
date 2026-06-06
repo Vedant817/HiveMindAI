@@ -47,7 +47,8 @@ HiveMindAI is an enterprise agent swarm:
    - The architecture map shows how work moves through the swarm.
    - The DAG shows the PM Agent's execution plan.
    - Jira-ready tickets are extracted from the meeting transcript.
-   - The timeline shows agent messages, status, and confidence.
+   - The timeline shows agent messages, status, confidence, and generated artifacts.
+   - Meeting tickets are queued and executed by the swarm; risky items pause for approval.
    - The debate panel shows how the swarm validates design choices.
    - The executive summary turns raw execution into manager-readable status.
 
@@ -74,5 +75,9 @@ $env:SWARM_STRICT_INTEGRATIONS="true"
 python main.py --check-config
 ```
 
+For a shared demo, set `HIVEMIND_API_KEY` and `APP_SECRET` so write endpoints are protected and
+approval links are signed.
+
 When `production_ready` is true, the same UI runs against real Azure OpenAI, Redis, Service Bus,
-Cosmos DB, AI Search, Jira, Slack, Teams, and email.
+Cosmos DB, AI Search, Jira, Slack, Teams, and email. Use `python main.py --verify-config --live-checks`
+to run safe live checks against configured providers before presenting.

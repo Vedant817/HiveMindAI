@@ -11,7 +11,8 @@ The implementation is intentionally credential-safe:
 - Without Azure, Jira, Slack, or Teams secrets, it runs in local fallback mode.
 - With environment variables from `.env.example`, the same interfaces call the configured services.
 - Set `SWARM_STRICT_INTEGRATIONS=true` to make missing production integrations fail immediately.
-- Local state is written under `local_state/` and is ignored by git.
+- Local state is written under `local_state/`; generated task artifacts are written under `workspace/`.
+- Public/shared deployments can set `HIVEMIND_API_KEY` and `APP_SECRET` to protect mutating API routes and sign Teams approval links.
 
 ## Quick Start
 
@@ -115,6 +116,7 @@ To verify the real production path before a demo:
 ```powershell
 $env:SWARM_STRICT_INTEGRATIONS="true"
 python main.py --check-config
+python main.py --verify-config --live-checks
 ```
 
 Or:
@@ -139,10 +141,14 @@ Useful endpoints:
 - `GET /config/check`
 - `POST /demo/run`
 - `POST /swarm/run` with `{"goal": "Build payment API"}`
-- `POST /ingest/transcript` with `{"transcript": "Action: build the dashboard before Friday"}`
+- `POST /ingest/transcript` with `{"transcript": "Action: build the dashboard before Friday", "execute": true}`
 - `POST /debate` with `{"question": "Should we use Redis or Service Bus for short-lived state?"}`
 - `POST /knowledge` to store a decision or fix
 - `GET /knowledge/search?q=redis`
+- `GET /knowledge/{entry_id}/related`
+- `GET /config/verify?live=true`
+
+When `HIVEMIND_API_KEY` is set, mutating endpoints require the `X-Hivemind-Api-Key` header.
 
 ## Project Layout
 
@@ -181,6 +187,10 @@ Set `LLM_PROVIDER` in `.env`:
 - `azure`: production Azure OpenAI path.
 - `auto`: use OpenRouter if configured, otherwise Azure if configured, otherwise local fallback.
 - `none`: always use local deterministic fallback.
+
+Local fallback mode still produces real workspace artifacts (`task_result.json`, `task_report.md`, and
+specialized dashboard/API artifacts when relevant). The validator checks these artifacts before marking
+work complete.
 
 OpenRouter variables:
 
