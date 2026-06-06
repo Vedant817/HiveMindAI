@@ -110,6 +110,7 @@ PRODUCTION_ENV_GROUPS: dict[str, tuple[str, ...]] = {
         "SENDER_EMAIL",
         "STAKEHOLDER_EMAIL",
     ),
+    "API Security": ("HIVEMIND_API_KEY", "APP_SECRET"),
 }
 
 
@@ -179,7 +180,9 @@ def config_report(groups: Iterable[str] | None = None) -> dict:
     selected = set(groups or env_groups)
     provider = active_llm_provider()
     if groups is None:
-        if stack in {"free", "local"}:
+        if stack == "local":
+            selected = {"OpenRouter"} if provider == "openrouter" else set()
+        elif stack == "free":
             selected.discard("Azure OpenAI")
             selected.discard("Azure OpenAI Whisper")
         elif provider == "openrouter":
@@ -215,8 +218,8 @@ def config_report(groups: Iterable[str] | None = None) -> dict:
         "local_fallbacks_enabled": local_fallbacks_enabled(),
         "local_test_ready": local_fallbacks_enabled(),
         "free_model_ready": provider == "openrouter" and llm_configured(),
-        "free_stack_ready": stack in {"free", "local"} and not missing_total,
-        "production_ready": not missing_total,
+        "free_stack_ready": stack == "free" and not missing_total,
+        "production_ready": stack == "azure" and not missing_total,
         "missing": missing_total,
         "integrations": integrations,
     }

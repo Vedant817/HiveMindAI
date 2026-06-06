@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 import json
 import os
@@ -31,11 +32,11 @@ class CosmosClient:
             item["id"] = item.get("entry_id") or item.get("task_id") or item.get("dag_id") or str(uuid.uuid4())
         mongo = self._mongo_collection(container)
         if mongo is not None:
-            mongo.replace_one({"id": item["id"]}, item, upsert=True)
+            await asyncio.to_thread(mongo.replace_one, {"id": item["id"]}, item, upsert=True)
             return item
         cosmos = self._cosmos_container(container)
         if cosmos is not None:
-            return cosmos.upsert_item(item)
+            return await asyncio.to_thread(cosmos.upsert_item, item)
         items = await self._read_all(container)
         items = [row for row in items if row.get("id") != item["id"]]
         items.append(item)
@@ -48,12 +49,12 @@ class CosmosClient:
     async def get(self, container: str, item_id: str) -> dict[str, Any] | None:
         mongo = self._mongo_collection(container)
         if mongo is not None:
-            row = mongo.find_one({"id": item_id}, {"_id": False})
+            row = await asyncio.to_thread(mongo.find_one, {"id": item_id}, {"_id": False})
             return dict(row) if row else None
         cosmos = self._cosmos_container(container)
         if cosmos is not None:
             try:
-                return cosmos.read_item(item=item_id, partition_key=item_id)
+                return await asyncio.to_thread(cosmos.read_item, item=item_id, partition_key=item_id)
             except Exception:
                 return None
         for item in await self._read_all(container):
@@ -69,18 +70,21 @@ class CosmosClient:
     ) -> list[dict[str, Any]]:
         mongo = self._mongo_collection(container)
         if mongo is not None:
-            cursor = mongo.find({}, {"_id": False})
-            if where and "ORDER BY" in where.upper() and "TIMESTAMP" in where.upper():
-                cursor = cursor.sort("timestamp", -1)
-            if limit:
-                cursor = cursor.limit(limit)
-            return [dict(row) for row in cursor]
+            def _mongo_query() -> list[dict[str, Any]]:
+                cursor = mongo.find({}, {"_id": False})
+                if where and "ORDER BY" in where.upper() and "TIMESTAMP" in where.upper():
+                    cursor = cursor.sort("timestamp", -1)
+                if limit:
+                    cursor = cursor.limit(limit)
+                return [dict(row) for row in cursor]
+
+            return await asyncio.to_thread(_mongo_query)
         cosmos = self._cosmos_container(container)
         if cosmos is not None:
             query = "SELECT * FROM c"
             if where:
                 query = f"{query} {where}"
-            rows = list(cosmos.query_items(query=query, enable_cross_partition_query=True))
+            rows = await asyncio.to_thread(lambda: list(cosmos.query_items(query=query, enable_cross_partition_query=True)))
             return rows[:limit] if limit else rows
         rows = await self._read_all(container)
         if where and "ORDER BY" in where.upper() and "TIMESTAMP" in where.upper():

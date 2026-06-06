@@ -5,12 +5,15 @@ from agents.knowledge_agent import KnowledgeAgent
 from agents.summary_agent import SummaryAgent
 from api import approval_webhook, ingest
 from api.demo import run_pitch_demo, run_pitch_demo_stream
+from api.security import require_api_key
 from memory.cosmos_client import CosmosClient
 from orchestrator.swarm_runtime import SwarmRuntime
 from shared.config import config_report, demo_defaults
+from shared.integration_checks import verify_config
+from shared.validation import PayloadValidationError, bounded_tags, bounded_text
 
 try:
-    from fastapi import APIRouter, HTTPException
+    from fastapi import APIRouter, Depends, HTTPException
     from fastapi.responses import StreamingResponse
 except Exception:  # pragma: no cover
     APIRouter = None
@@ -36,36 +39,43 @@ if APIRouter:
     async def check_config():
         return config_report()
 
+    @router.get("/config/verify")
+    async def verify_configuration(live: bool = False):
+        return await verify_config(live=live)
+
     @router.get("/demo/defaults")
     async def get_demo_defaults():
         return demo_defaults()
 
-    @router.post("/swarm/run")
+    @router.post("/swarm/run", dependencies=[Depends(require_api_key)])
     async def run_goal(payload: dict):
-        goal = str(payload.get("goal", "")).strip()
-        if not goal:
-            raise HTTPException(status_code=400, detail="goal is required")
+        try:
+            goal = bounded_text(payload, "goal", max_length=4000)
+        except PayloadValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return await runtime.run_goal(goal)
 
-    @router.post("/demo/run")
+    @router.post("/demo/run", dependencies=[Depends(require_api_key)])
     async def run_demo(payload: dict):
         return await run_pitch_demo(payload)
 
-    @router.post("/demo/run/stream")
+    @router.post("/demo/run/stream", dependencies=[Depends(require_api_key)])
     async def run_demo_stream(payload: dict):
         return StreamingResponse(run_pitch_demo_stream(payload), media_type="text/event-stream")
 
-    @router.post("/knowledge")
+    @router.post("/knowledge", dependencies=[Depends(require_api_key)])
     async def remember(payload: dict):
-        title = str(payload.get("title", "")).strip()
-        content = str(payload.get("content", "")).strip()
-        if not title or not content:
-            raise HTTPException(status_code=400, detail="title and content are required")
+        try:
+            title = bounded_text(payload, "title", max_length=200)
+            content = bounded_text(payload, "content", max_length=16000)
+            tags = bounded_tags(payload.get("tags", []))
+        except PayloadValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return await knowledge.remember(
             title=title,
             content=content,
             kind=payload.get("kind", "decision"),
-            tags=payload.get("tags", []),
+            tags=tags,
             source=payload.get("source"),
         )
 
@@ -73,11 +83,16 @@ if APIRouter:
     async def search_knowledge(q: str):
         return await knowledge.answer(q)
 
-    @router.post("/debate")
+    @router.get("/knowledge/{entry_id}/related")
+    async def related_knowledge(entry_id: str, depth: int = 1):
+        return await knowledge.related(entry_id, depth=depth)
+
+    @router.post("/debate", dependencies=[Depends(require_api_key)])
     async def run_debate(payload: dict):
-        question = str(payload.get("question", "")).strip()
-        if not question:
-            raise HTTPException(status_code=400, detail="question is required")
+        try:
+            question = bounded_text(payload, "question", max_length=4000)
+        except PayloadValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return await debate.run_debate(question)
 
     @router.get("/summary")

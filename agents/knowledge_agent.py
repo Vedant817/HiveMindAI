@@ -28,13 +28,18 @@ class KnowledgeAgent:
     async def connect(self, source_id: str, target_id: str, relation: str) -> dict:
         return await self.store.add_relation(KnowledgeRelation(source_id, target_id, relation))
 
+    async def related(self, entry_id: str, depth: int = 1) -> dict:
+        return await self.store.related_entries(entry_id, depth=depth)
+
     async def answer(self, question: str) -> dict:
-        matches = await self.store.search_entries(question)
+        graph = await self.store.graph_context(question)
+        matches = graph["matches"]
         if not matches:
-            return {"answer": "No matching organizational memory found.", "sources": []}
+            return {"answer": "No matching organizational memory found.", "sources": [], "graph": graph}
         top = matches[0]
         return {
             "answer": top.get("content", ""),
             "sources": [{"id": row.get("id"), "title": row.get("title")} for row in matches],
+            "graph": graph,
         }
 

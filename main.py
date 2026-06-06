@@ -8,6 +8,7 @@ from pathlib import Path
 
 from orchestrator.swarm_runtime import SwarmRuntime
 from shared.config import config_report
+from shared.integration_checks import verify_config
 
 
 def create_app():
@@ -40,6 +41,8 @@ def main() -> None:
     parser.add_argument("--serve", action="store_true", help="Start the FastAPI server")
     parser.add_argument("--check-config", action="store_true", help="Check production integration configuration")
     parser.add_argument("--check-local-config", action="store_true", help="Check local fallback configuration")
+    parser.add_argument("--verify-config", action="store_true", help="Verify configured integrations; add --live-checks for network calls")
+    parser.add_argument("--live-checks", action="store_true", help="Allow --verify-config to make safe live dependency calls")
     parser.add_argument("--host", default=os.getenv("APP_HOST", "127.0.0.1"))
     parser.add_argument("--port", default=int(os.getenv("APP_PORT", "8000")), type=int)
     args = parser.parse_args()
@@ -53,6 +56,11 @@ def main() -> None:
         report = config_report()
         print(json.dumps(report, indent=2))
         raise SystemExit(0 if report["local_test_ready"] else 1)
+
+    if args.verify_config:
+        report = asyncio.run(verify_config(live=args.live_checks))
+        print(json.dumps(report, indent=2))
+        raise SystemExit(0 if report["verified_ready"] else 1)
 
     if args.serve:
         import uvicorn

@@ -54,15 +54,43 @@ and maintainability from 0-10, then pick a winner. Return only JSON:
         return row if row is not None else self._validate(proposals)
 
     def _proposal(self, persona: DebatePersona, question: str) -> dict:
+        scores = self._score_for_question(persona, question)
+        leading = max(scores, key=scores.get)
         return {
             "agent": persona.name,
-            "proposal": f"{persona.bias} For '{question}', choose the option that best fits that constraint.",
-            "scores": {
-                "scalability": persona.weight[0],
-                "cost": persona.weight[1],
-                "maintainability": persona.weight[2],
-            },
+            "proposal": (
+                f"{persona.bias} For '{question}', prioritize {leading} because the question signals "
+                f"{self._signals(question) or 'balanced delivery constraints'}."
+            ),
+            "scores": scores,
         }
+
+    def _score_for_question(self, persona: DebatePersona, question: str) -> dict:
+        q = question.lower()
+        scores = {
+            "scalability": persona.weight[0],
+            "cost": persona.weight[1],
+            "maintainability": persona.weight[2],
+        }
+        boosts = {
+            "scalability": ("scale", "throughput", "latency", "realtime", "pub/sub", "redis", "status"),
+            "cost": ("cost", "free", "budget", "cheap", "serverless"),
+            "maintainability": ("simple", "maintain", "operat", "durable", "service bus", "audit", "enterprise"),
+        }
+        for dimension, words in boosts.items():
+            scores[dimension] += sum(2 for word in words if word in q)
+        return {key: min(10, value) for key, value in scores.items()}
+
+    def _signals(self, question: str) -> str:
+        q = question.lower()
+        found = []
+        if any(word in q for word in ("redis", "pub/sub", "latency", "realtime")):
+            found.append("low-latency status fan-out")
+        if any(word in q for word in ("service bus", "durable", "audit", "enterprise")):
+            found.append("durable enterprise messaging")
+        if any(word in q for word in ("cost", "free", "budget")):
+            found.append("cost sensitivity")
+        return ", ".join(found)
 
     def _validate(self, proposals: list[dict]) -> dict:
         scored = []

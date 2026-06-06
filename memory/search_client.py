@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import math
 import os
 import re
@@ -24,7 +25,7 @@ class SearchClient:
         azure_client = self._azure_client()
         if azure_client is not None:
             try:
-                azure_client.merge_or_upload_documents([document])
+                await asyncio.to_thread(azure_client.merge_or_upload_documents, [document])
                 return
             except Exception as exc:
                 require_or_fallback("Azure AI Search", f"indexing failed: {exc}")
@@ -35,7 +36,7 @@ class SearchClient:
         azure_client = self._azure_client()
         if azure_client is not None:
             try:
-                return [dict(row) for row in azure_client.search(query, top=limit)]
+                return await asyncio.to_thread(lambda: [dict(row) for row in azure_client.search(query, top=limit)])
             except Exception as exc:
                 require_or_fallback("Azure AI Search", f"search failed: {exc}")
         return self._keyword_search(self._documents, query, limit)
