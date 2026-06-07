@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>HiveMindAI Swarm Demo</title>
+    <title>HiveMindAI Agent Swarm</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <script>
@@ -35,7 +35,7 @@
     <header class="border-b border-line bg-panel">
       <div class="mx-auto flex w-full max-w-[1500px] flex-col gap-4 px-4 py-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
         <div class="min-w-0">
-          <p class="text-xs font-bold uppercase tracking-normal text-teal">Hackathon demo console</p>
+          <p class="text-xs font-bold uppercase tracking-normal text-teal">Operations console</p>
           <h1 class="mt-1 text-2xl font-bold leading-tight sm:text-3xl">HiveMindAI Agent Swarm</h1>
         </div>
         <div class="flex flex-wrap items-center gap-2">
@@ -59,18 +59,18 @@
           <div class="mt-4 grid gap-3">
             <label class="grid gap-1.5 text-sm font-bold">
               <span>Business goal</span>
-              <textarea class="min-h-24 w-full resize-y rounded-md border border-line bg-white p-3 text-sm font-normal leading-relaxed text-ink outline-none focus:border-teal focus:ring-2 focus:ring-teal/20" id="goalInput" rows="4" placeholder="Loading demo goal..."></textarea>
+              <textarea class="min-h-24 w-full resize-y rounded-md border border-line bg-white p-3 text-sm font-normal leading-relaxed text-ink outline-none focus:border-teal focus:ring-2 focus:ring-teal/20" id="goalInput" rows="4" placeholder="Loading workflow goal..."></textarea>
             </label>
             <label class="grid gap-1.5 text-sm font-bold">
               <span>Meeting transcript</span>
-              <textarea class="min-h-32 w-full resize-y rounded-md border border-line bg-white p-3 text-sm font-normal leading-relaxed text-ink outline-none focus:border-teal focus:ring-2 focus:ring-teal/20" id="transcriptInput" rows="6" placeholder="Loading demo transcript..."></textarea>
+              <textarea class="min-h-32 w-full resize-y rounded-md border border-line bg-white p-3 text-sm font-normal leading-relaxed text-ink outline-none focus:border-teal focus:ring-2 focus:ring-teal/20" id="transcriptInput" rows="6" placeholder="Loading transcript..."></textarea>
             </label>
           </div>
 
           <div class="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
-            <button class="inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-teal px-4 text-sm font-bold text-white transition hover:bg-teal/90 disabled:cursor-wait disabled:opacity-60" id="runDemoButton" type="button">
+            <button class="inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-teal px-4 text-sm font-bold text-white transition hover:bg-teal/90 disabled:cursor-wait disabled:opacity-60" id="runWorkflowButton" type="button">
               <i data-lucide="play" class="h-4 w-4"></i>
-              <span>Run live demo</span>
+              <span>Run workflow</span>
             </button>
             <button class="inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-navy px-4 text-sm font-bold text-white transition hover:bg-navy/90 disabled:cursor-wait disabled:opacity-60" id="configButton" type="button">
               <i data-lucide="shield-check" class="h-4 w-4"></i>
@@ -147,7 +147,7 @@
               <p class="text-xs font-bold uppercase tracking-normal text-teal">Execution DAG</p>
               <h2 class="text-xl font-bold leading-tight">Planned tasks</h2>
             </div>
-            <div id="dagView" class="flex min-h-56 items-center justify-center rounded-md border border-dashed border-line p-4 text-center text-muted">Run the demo to render the task graph.</div>
+            <div id="dagView" class="flex min-h-56 items-center justify-center rounded-md border border-dashed border-line p-4 text-center text-muted">Run the workflow to render the task graph.</div>
           </article>
 
           <article class="rounded-lg border border-line bg-panel p-4 shadow-soft">
@@ -183,7 +183,7 @@
               <p class="text-xs font-bold uppercase tracking-normal text-teal">Manager view</p>
               <h2 class="text-xl font-bold leading-tight">Executive summary</h2>
             </div>
-            <pre id="summaryView" class="min-h-64 overflow-auto whitespace-pre-wrap rounded-md bg-navy p-4 font-mono text-sm leading-relaxed text-white">Run the demo to generate a concise project report.</pre>
+            <pre id="summaryView" class="min-h-64 overflow-auto whitespace-pre-wrap rounded-md bg-navy p-4 font-mono text-sm leading-relaxed text-white">Run the workflow to generate a concise project report.</pre>
           </article>
 
           <article class="rounded-lg border border-line bg-panel p-4 shadow-soft">

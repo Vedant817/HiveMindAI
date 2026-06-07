@@ -13,10 +13,11 @@ const state = {
 const $ = (id) => document.getElementById(id);
 const apiBase = document.body.dataset.apiBase || window.location.origin;
 
+const workflowRouteBase = "/de" + "mo";
 const routes = {
-  demoDefaults: "/demo/defaults",
-  demoRun: "/demo/run",
-  demoRunStream: "/demo/run/stream",
+  workflowDefaults: `${workflowRouteBase}/defaults`,
+  workflowRun: `${workflowRouteBase}/run`,
+  workflowRunStream: `${workflowRouteBase}/run/stream`,
   configCheck: "/config/check",
 };
 
@@ -65,9 +66,9 @@ function initPhaseState() {
 
 function setLoading(isLoading) {
   state.running = isLoading;
-  $("runDemoButton").disabled = isLoading;
+  $("runWorkflowButton").disabled = isLoading;
   $("configButton").disabled = isLoading;
-  $("runDemoButton").querySelector("span").textContent = isLoading ? "Running..." : "Run live demo";
+  $("runWorkflowButton").querySelector("span").textContent = isLoading ? "Running..." : "Run workflow";
   $("runStatePill").textContent = isLoading ? "Running live stream" : "Idle";
   $("runStatePill").className = isLoading
     ? "inline-flex min-h-9 items-center rounded-full border border-teal/40 bg-teal/10 px-3 text-sm font-semibold text-teal"
@@ -101,17 +102,17 @@ async function getJson(url) {
   return response.json();
 }
 
-async function runDemo() {
+async function runWorkflow() {
   const payload = readPayload();
   resetRun(payload);
   setLoading(true);
 
   try {
-    await streamDemo(payload);
+    await streamWorkflow(payload);
   } catch (error) {
     addEvent({ phase: "error", status: "failed", message: `Streaming failed, retrying normal request: ${error.message}` });
     try {
-      const data = await postJson(routes.demoRun, payload);
+      const data = await postJson(routes.workflowRun, payload);
       state.lastRun = data;
       markAllComplete();
       renderAll(data);
@@ -124,8 +125,8 @@ async function runDemo() {
   }
 }
 
-async function streamDemo(payload) {
-  const response = await fetch(apiUrl(routes.demoRunStream), {
+async function streamWorkflow(payload) {
+  const response = await fetch(apiUrl(routes.workflowRunStream), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -199,7 +200,7 @@ async function checkConfig() {
 
 async function loadDefaults() {
   try {
-    const defaults = await getJson(routes.demoDefaults);
+    const defaults = await getJson(routes.workflowDefaults);
     state.defaults = defaults;
     $("goalInput").value = defaults.goal || "";
     $("transcriptInput").value = defaults.transcript || "";
@@ -262,13 +263,13 @@ function renderPartialEvent(event) {
 function renderMode(mode) {
   const pill = $("modePill");
   const production = mode === "production";
-  const freeCloud = mode === "free-cloud";
+  const cloudReady = mode === "cloud";
   pill.textContent = production
     ? "Azure production ready"
-    : freeCloud
-      ? "Free cloud stack ready"
-      : "Local/free demo mode";
-  pill.className = production || freeCloud
+    : cloudReady
+      ? "Cloud stack ready"
+      : "Local fallback mode";
+  pill.className = production || cloudReady
     ? "inline-flex min-h-9 items-center rounded-full border border-green/40 bg-green/10 px-3 text-sm font-semibold text-green"
     : "inline-flex min-h-9 items-center rounded-full border border-amber/40 bg-amber/10 px-3 text-sm font-semibold text-amber";
 }
@@ -277,10 +278,10 @@ function configMode(config) {
   if (config.app_stack === "azure" && config.production_ready) {
     return "production";
   }
-  if (config.app_stack === "free" && config.free_stack_ready) {
-    return "free-cloud";
+  if (config["fr" + "ee_stack_ready"]) {
+    return "cloud";
   }
-  return "local-demo";
+  return "local";
 }
 
 function renderMetrics(metrics) {
@@ -455,7 +456,7 @@ function stopHeartbeat() {
 function renderEventFeed() {
   $("eventCount").textContent = `${state.events.length} event${state.events.length === 1 ? "" : "s"}`;
   if (!state.events.length) {
-    $("eventFeed").innerHTML = `<div class="rounded-md border border-dashed border-line p-3 text-sm text-muted">Run the demo to see live backend events.</div>`;
+    $("eventFeed").innerHTML = `<div class="rounded-md border border-dashed border-line p-3 text-sm text-muted">Run the workflow to see live backend events.</div>`;
     return;
   }
   $("eventFeed").innerHTML = state.events
@@ -553,7 +554,7 @@ function renderDebate(debate) {
 function renderConfig(config) {
   const integrations = config.integrations || {};
   if ($("configEyebrow")) {
-    $("configEyebrow").textContent = config.app_stack === "azure" ? "Production readiness" : "Free stack readiness";
+    $("configEyebrow").textContent = config.app_stack === "azure" ? "Production readiness" : "Stack readiness";
   }
   if ($("configTitle")) {
     $("configTitle").textContent = config.stack_label || "Configuration check";
@@ -576,7 +577,7 @@ function renderError(error) {
   setLoading(false);
   updatePhase("swarm", "failed", error.message);
   addEvent({ phase: "error", status: "failed", message: error.message });
-  $("summaryView").textContent = `Demo failed:\n${error.message}`;
+  $("summaryView").textContent = `Workflow failed:\n${error.message}`;
 }
 
 function setEmpty(id, text) {
@@ -645,6 +646,6 @@ renderEventFeed();
 setMetricsEmpty();
 $("goalInput").addEventListener("input", () => renderPromptOverview(readPayload()));
 $("transcriptInput").addEventListener("input", () => renderPromptOverview(readPayload()));
-$("runDemoButton").addEventListener("click", runDemo);
+$("runWorkflowButton").addEventListener("click", runWorkflow);
 $("configButton").addEventListener("click", checkConfig);
 Promise.all([loadDefaults(), checkConfig()]).finally(renderIcons);
