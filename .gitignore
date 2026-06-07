@@ -33,3 +33,5 @@ plan*.md
 Thumbs.db
 .vscode/
 .idea/
+
+.vercel
