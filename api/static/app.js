@@ -8,6 +8,7 @@ const state = {
   runStartedAt: null,
   lastEventAt: null,
   running: false,
+  configChecking: false,
   logLines: [],
 };
 
@@ -68,14 +69,9 @@ function initPhaseState() {
 function setLoading(isLoading) {
   state.running = isLoading;
   $("runWorkflowButton").disabled = isLoading;
-  $("configButton").disabled = isLoading;
+  $("configButton").disabled = isLoading || state.configChecking;
   $("runWorkflowButton").querySelector("span").textContent = isLoading ? "Running..." : "Run workflow";
-  $("runStatePill").innerHTML = isLoading
-    ? `<span class="h-2 w-2 animate-pulse rounded-full bg-teal"></span>Running live stream`
-    : `<span class="h-2 w-2 rounded-full bg-muted"></span>Idle`;
-  $("runStatePill").className = isLoading
-    ? "inline-flex min-h-9 items-center gap-2 rounded-full border border-teal/40 bg-teal/10 px-3 text-sm font-bold text-teal shadow-sm"
-    : "inline-flex min-h-9 items-center gap-2 rounded-full border border-line bg-white px-3 text-sm font-bold text-muted shadow-sm";
+  renderRunStatePill();
   updateLiveAgent();
   if (isLoading) {
     startHeartbeat();
@@ -84,10 +80,35 @@ function setLoading(isLoading) {
   }
 }
 
+function setConfigChecking(isChecking) {
+  state.configChecking = isChecking;
+  $("configButton").disabled = isChecking || state.running;
+  $("runWorkflowButton").disabled = state.running;
+  $("configButton").querySelector("span").textContent = isChecking ? "Checking..." : "Check config";
+  renderRunStatePill();
+}
+
+function renderRunStatePill() {
+  const pill = $("runStatePill");
+  if (state.running) {
+    pill.innerHTML = `<span class="h-2 w-2 animate-pulse rounded-full bg-teal"></span>Running live stream`;
+    pill.className = "inline-flex min-h-9 items-center gap-2 rounded-full border border-teal/40 bg-teal/10 px-3 text-sm font-bold text-teal shadow-sm";
+    return;
+  }
+  if (state.configChecking) {
+    pill.innerHTML = `<span class="h-2 w-2 animate-pulse rounded-full bg-amber"></span>Checking config`;
+    pill.className = "inline-flex min-h-9 items-center gap-2 rounded-full border border-amber/40 bg-amber/10 px-3 text-sm font-bold text-amber shadow-sm";
+    return;
+  }
+  pill.innerHTML = `<span class="h-2 w-2 rounded-full bg-muted"></span>Idle`;
+  pill.className = "inline-flex min-h-9 items-center gap-2 rounded-full border border-line bg-white px-3 text-sm font-bold text-muted shadow-sm";
+}
+
+
 async function postJson(url, body) {
   const response = await fetch(apiUrl(url), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: requestHeaders(),
     body: JSON.stringify(body),
   });
   if (!response.ok) {
@@ -98,7 +119,7 @@ async function postJson(url, body) {
 }
 
 async function getJson(url) {
-  const response = await fetch(apiUrl(url));
+  const response = await fetch(apiUrl(url), { headers: requestHeaders(false) });
   if (!response.ok) {
     const text = await response.text();
     throw new Error(text || response.statusText);
@@ -132,7 +153,7 @@ async function runWorkflow() {
 async function streamWorkflow(payload) {
   const response = await fetch(apiUrl(routes.workflowRunStream), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: requestHeaders(),
     body: JSON.stringify(payload),
   });
   if (!response.ok || !response.body) {
@@ -161,11 +182,22 @@ async function streamWorkflow(payload) {
 }
 
 function handleStreamChunk(chunk) {
-  const line = chunk
+  const payload = chunk
     .split("\n")
-    .find((row) => row.startsWith("data:"));
-  if (!line) return;
-  const event = JSON.parse(line.replace(/^data:\s*/, ""));
+    .filter((row) => row.startsWith("data:"))
+    .map((row) => row.replace(/^data:\s?/, ""))
+    .join("\n")
+    .trim();
+  if (!payload) return;
+
+  let event;
+  try {
+    event = JSON.parse(payload);
+  } catch (error) {
+    addEvent({ phase: "stream", status: "failed", message: `Ignored malformed stream event: ${error.message}` });
+    return;
+  }
+
   if (event.type === "complete") {
     updatePhase(event.phase, "complete", event.message);
     addEvent(event);
@@ -186,8 +218,9 @@ function handleStreamChunk(chunk) {
   renderPartialEvent(event);
 }
 
+
 async function checkConfig() {
-  setLoading(true);
+  setConfigChecking(true);
   try {
     const data = await getJson(routes.configCheck);
     renderConfig(data);
@@ -195,9 +228,9 @@ async function checkConfig() {
     updatePhase("config", "complete", data.local_test_ready ? "Local testing is ready." : "Configuration needs attention.");
     addEvent({ phase: "config", status: "complete", message: "Configuration check completed." });
   } catch (error) {
-    renderError(error);
+    renderError(error, "config");
   } finally {
-    setLoading(false);
+    setConfigChecking(false);
     renderIcons();
   }
 }
@@ -590,11 +623,14 @@ function renderConfig(config) {
     .join("");
 }
 
-function renderError(error) {
+function renderError(error, phase = "swarm") {
+  const wasRunning = state.running;
   setLoading(false);
-  updatePhase("swarm", "failed", error.message);
-  addEvent({ phase: "error", status: "failed", message: error.message });
-  $("summaryView").textContent = `Workflow failed:\n${error.message}`;
+  const phaseKey = state.phases[phase] ? phase : "swarm";
+  updatePhase(phaseKey, "failed", error.message);
+  addEvent({ phase: phaseKey, status: "failed", message: error.message });
+  const title = phaseKey === "config" && !wasRunning ? "Configuration check failed" : "Workflow failed";
+  $("summaryView").textContent = `${title}:\n${error.message}`;
 }
 
 function addLogLine(event) {
@@ -623,11 +659,11 @@ function renderLogStream() {
   $("liveLogStream").innerHTML = state.logLines
     .map((line) => {
       const color = line.status === "complete" ? "text-emerald-300" : line.status === "failed" ? "text-rose-300" : "text-cyan-200";
-      return `<div class="mb-1.5 grid grid-cols-[72px_18px_112px_minmax(0,1fr)] gap-2">
-        <span class="text-slate-500">${escapeHtml(line.timestamp)}</span>
-        <span class="${color}">${escapeHtml(line.prefix)}</span>
-        <span class="truncate uppercase tracking-wide ${color}">${escapeHtml(line.phase)}</span>
-        <span class="break-words text-slate-200">${escapeHtml(line.message)}</span>
+      return `<div class="mb-2 rounded-xl border border-white/5 bg-white/[0.03] p-2 sm:grid sm:grid-cols-[74px_18px_112px_minmax(0,1fr)] sm:gap-2">
+        <span class="mr-2 text-slate-500">${escapeHtml(line.timestamp)}</span>
+        <span class="mr-2 ${color}">${escapeHtml(line.prefix)}</span>
+        <span class="mr-2 inline-block max-w-full truncate uppercase tracking-wide ${color}">${escapeHtml(line.phase)}</span>
+        <span class="block break-words text-slate-200 sm:inline">${escapeHtml(line.message)}</span>
       </div>`;
     })
     .join("");
@@ -661,6 +697,23 @@ function updateLiveAgent(extraMessage = "") {
 function setEmpty(id, text) {
   $(id).className = emptyClass;
   $(id).textContent = text;
+}
+
+function requestHeaders(includeContentType = true) {
+  const headers = includeContentType ? { "Content-Type": "application/json" } : {};
+  const apiKey = document.body.dataset.apiKey || storedApiKey();
+  if (apiKey) {
+    headers["x-hivemind-api-key"] = apiKey;
+  }
+  return headers;
+}
+
+function storedApiKey() {
+  try {
+    return window.localStorage?.getItem("hivemindApiKey") || "";
+  } catch (_error) {
+    return "";
+  }
 }
 
 function apiUrl(path) {

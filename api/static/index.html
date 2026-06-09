@@ -53,6 +53,13 @@
       }
       .pulse-ring::after { animation-delay: 1.1s; }
       .drift { animation: drift 5s ease-in-out infinite; }
+      @media (prefers-reduced-motion: reduce) {
+        .pulse-ring::before,
+        .pulse-ring::after,
+        .drift {
+          animation: none;
+        }
+      }
     </style>
   </head>
   <body class="min-w-80 bg-paper text-ink antialiased">
