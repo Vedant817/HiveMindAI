@@ -1,10 +1,47 @@
 # HiveMindAI
 
-HiveMindAI is a local-first implementation of the agent swarm described in
-`ExecutionSummary.md`, with the `symphony/` project used as the orchestration reference. It
-implements the full Planner -> Executor -> Validator loop, PM orchestration, organizational memory,
-meeting-to-ticket ingestion, debate validation, human approval gates, workplace comms, reflection,
-and executive summary generation.
+HiveMindAI is a self-managing agent swarm that turns business goals and meeting transcripts into
+coordinated, validated, observable execution. Instead of acting like a single chatbot, HiveMindAI
+uses multiple specialist agents — Planner, PM, Executor, Validator, Meeting, Debate, Comms,
+Knowledge, Reflection, and Summary — connected through a dependency-aware task DAG with validation
+checkpoints, confidence-based human approval gates, organizational memory, and workplace
+communication fallbacks.
+
+The system starts with a high-level goal or meeting transcript. The Meeting Agent extracts Jira-ready
+tickets; the PM/Planner Agent converts goals into a dependency-aware task DAG. Executor Agents
+generate real task artefacts, Validator Agents verify them, and a confidence-based Human-in-the-Loop
+gate pauses low-confidence or risky tasks for Teams-based approval. A Knowledge Agent stores
+decisions and relations with graph traversal, while Reflection and Summary Agents produce improvement
+notes and executive summaries.
+
+Decision-making is augmented by a multi-persona Debate Orchestrator that scores proposals across
+scalability, cost, and maintainability. The system runs a FastAPI dashboard with real-time SSE
+streaming, ingestion endpoints for meeting files and transcripts, signed approval tokens via HMAC,
+Azure Functions for nightly summaries, and a full local-first fallback stack requiring no paid
+services. Every agent, integration, and persistence layer degrades gracefully through deterministic
+local fallbacks when cloud credentials are absent.
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| **Language** | Python 3.10–3.13 |
+| **Web Framework** | FastAPI, Uvicorn |
+| **LLM Providers** | OpenRouter (OpenAI SDK), Azure OpenAI, deterministic local fallbacks |
+| **Orchestration** | pyautogen (AutoGen GroupChat), custom SwarmRuntime |
+| **Databases** | MongoDB Atlas (pymongo), Azure Cosmos DB, local JSON fallback |
+| **Caching / Queue** | Upstash Redis (redis-py), Azure Service Bus, in-memory fallback |
+| **Search** | Azure AI Search, keyword-based local fallback |
+| **Storage** | Azure Blob Storage, local filesystem workspace |
+| **Messaging** | Microsoft Teams webhooks (adaptive cards), Slack webhooks |
+| **Project Mgmt** | Jira REST API, Azure DevOps REST API |
+| **Email** | Azure Communication Services Email |
+| **Auth / Security** | HMAC-signed approval tokens (hmac, hashlib), API key header |
+| **Validation** | Pydantic v2, custom payload bounds |
+| **Serverless** | Azure Functions (nightly summary sender) |
+| **Infrastructure** | Docker, docker-compose |
+| **Testing / Lint** | pytest, pytest-asyncio, ruff |
+| **HTTP Client** | httpx, httpcore |
 
 The implementation is intentionally credential-safe:
 
@@ -137,16 +174,23 @@ true` means the free cloud stack has OpenRouter, MongoDB Atlas, and Upstash Redi
 
 Useful endpoints:
 
+- `GET /` — Dashboard UI
 - `GET /health`
 - `GET /config/check`
-- `POST /demo/run`
+- `POST /demo/run` — Full pitch demo (swarm + meeting + debate + summary)
+- `POST /demo/run/stream` — Same demo as server-sent events (SSE)
 - `POST /swarm/run` with `{"goal": "Build payment API"}`
 - `POST /ingest/transcript` with `{"transcript": "Action: build the dashboard before Friday", "execute": true}`
+- `POST /ingest/meeting` — Upload a meeting file (audio, txt, md, vtt, srt)
 - `POST /debate` with `{"question": "Should we use Redis or Service Bus for short-lived state?"}`
-- `POST /knowledge` to store a decision or fix
+- `POST /knowledge` — Store a decision or fix
 - `GET /knowledge/search?q=redis`
 - `GET /knowledge/{entry_id}/related`
+- `POST /approval/{id}/approve` — Resume task after human approval
+- `POST /approval/{id}/reject` — Block task after human rejection
+- `GET /summary` — Executive project summary
 - `GET /config/verify?live=true`
+- `GET /demo/defaults`
 
 When `HIVEMIND_API_KEY` is set, mutating endpoints require the `X-Hivemind-Api-Key` header.
 
