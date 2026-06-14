@@ -4,23 +4,24 @@ This document describes the feature for handling prompt changes after a user has
 
 ## Problem
 
-A user may click **Run workflow** and then remember an extra requirement, constraint, or transcript detail while the orchestrator is already planning or executing. The system needs a safe way to accept that new context without corrupting the active run.
+A user may click **Run workflow** and then remember an extra requirement, constraint, or transcript detail while the orchestrator is already planning or executing. The system needs a safe way to accept that new context without silently corrupting the active run.
 
 ## UX Modes
 
 HiveMindAI supports two user choices when the prompt changes during an active run:
 
-1. **Queue after finish**
+1. **Update running workflow**
+   - The edited goal/transcript is applied immediately.
+   - The frontend aborts the current Server-Sent Events stream.
+   - A new workflow starts with the updated prompt payload.
+   - This is the current safe implementation for “update the running workflow” because it avoids mutating a partially executed DAG in place.
+
+2. **Run after current finish**
    - The edited goal/transcript is stored as the next workflow payload.
-   - When the current workflow completes, the queued payload automatically starts as a new workflow.
-   - This is the safest option because it does not mutate a running DAG.
-
-2. **Use after finish**
-   - The edited goal/transcript is saved in the UI.
    - The current workflow continues unchanged.
-   - When the run finishes, the user can manually start the updated prompt.
+   - When the current workflow completes, the queued payload automatically starts as a new workflow.
 
-The current implementation uses these two safe modes. A future live-DAG amendment controller can be added when the runtime has cancellation, task versioning, and worker coordination.
+The current implementation uses **immediate restart** for live updates and **queued follow-up run** for after-finish updates. A future live-DAG amendment controller can be added when the runtime has cancellation, task versioning, and worker coordination.
 
 ## Current Implemented Flow
 
@@ -33,20 +34,25 @@ flowchart TD
 
     F[User edits goal or transcript while running] --> G{Prompt differs from active payload?}
     G -- No --> E
-    G -- Yes --> H[Show prompt update panel]
+    G -- Yes --> H[Show prompt update panel near Run workflow button]
     H --> I{User choice}
-    I -- Queue after finish --> J[Store queuedPayload + autoRun=true]
-    I -- Use after finish --> K[Store queuedPayload + autoRun=false]
-    I -- Clear update --> L[Ignore current edit for this run]
 
-    D --> M[Current workflow completes]
-    M --> N{Queued auto-run?}
-    N -- Yes --> O[Start new workflow with queued payload]
-    N -- No --> P[Leave updated prompt ready for manual run]
-    O --> B
+    I -- Update running workflow --> J[Store immediateUpdatePayload]
+    J --> K[Abort active SSE stream]
+    K --> L[Start a new workflow with edited payload]
+    L --> B
+
+    I -- Run after current finish --> M[Store queuedPayload + autoRun=true]
+    I -- Clear update --> N[Ignore current edit for this run]
+
+    D --> O[Current workflow completes]
+    O --> P{Queued follow-up exists?}
+    P -- Yes --> Q[Start new workflow with queued payload]
+    P -- No --> R[Stay on completed workflow]
+    Q --> B
 ```
 
-## Future Live-Amendment Architecture
+## Future Live-DAG Amendment Architecture
 
 ```mermaid
 flowchart TD
@@ -70,18 +76,18 @@ flowchart TD
     L --> M[Workers consume updated ready tasks]
 ```
 
-## Why Not Mutate Running Work Immediately?
+## Why Immediate Restart Instead of Silent In-Place Mutation?
 
-Mutating a live workflow is risky because:
+Silently mutating a live workflow is risky because:
 
 - A task may already be executing with the old prompt.
 - A downstream task may depend on old assumptions.
 - Human approval may already be pending for an earlier version.
 - Artifacts and validation results need version tracking.
 
-The queue-after-finish approach is deterministic and safe for the current architecture.
+The current **Update running workflow** button uses an explicit restart of the active stream with the edited prompt. It feels immediate to the user while keeping the runtime deterministic.
 
-## Data Model Additions for Future Live Amendments
+## Data Model Additions for Future In-Place Amendments
 
 A future implementation should add:
 
@@ -124,7 +130,7 @@ TaskNode
 
 ```text
 api/static/index.html     Prompt update panel and buttons
-api/static/app.js         Payload snapshot, queue state, auto-run/manual-run behavior
-api/demo.py               Existing stream endpoint used by queued runs
+api/static/app.js         Payload snapshot, immediate restart, queued follow-up behavior
+api/demo.py               Existing stream endpoint used by workflow runs
 orchestrator/             Future location for live amendment controller
 ```

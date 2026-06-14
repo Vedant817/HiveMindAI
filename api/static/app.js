@@ -19,6 +19,8 @@ const state = {
   queuedAutoRun: false,
   promptUpdateMode: null,
   ignoredPromptPayload: null,
+  streamController: null,
+  immediateUpdatePayload: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -148,20 +150,35 @@ async function runWorkflow(payloadOverride = null) {
   try {
     await streamWorkflow(payload);
   } catch (error) {
-    addEvent({ phase: "error", status: "failed", message: `Streaming failed, retrying normal request: ${error.message}` });
-    try {
-      const data = await postJson(routes.workflowRun, payload);
-      state.lastRun = data;
-      markAllComplete();
-      renderAll(data);
-    } catch (fallbackError) {
-      renderError(fallbackError);
+    if (isAbortForImmediateUpdate(error)) {
+      addEvent({ phase: "amendment", status: "complete", message: "Active workflow stream stopped. Restarting with the updated prompt." });
+    } else {
+      addEvent({ phase: "error", status: "failed", message: `Streaming failed, retrying normal request: ${error.message}` });
+      try {
+        const data = await postJson(routes.workflowRun, payload);
+        state.lastRun = data;
+        markAllComplete();
+        renderAll(data);
+      } catch (fallbackError) {
+        renderError(fallbackError);
+      }
     }
   } finally {
     setLoading(false);
-    const nextPayload = state.queuedAutoRun && state.queuedPayload ? state.queuedPayload : null;
+    const immediatePayload = state.immediateUpdatePayload;
+    const nextPayload = !immediatePayload && state.queuedAutoRun && state.queuedPayload ? state.queuedPayload : null;
     state.activeRunPayload = null;
-    if (nextPayload) {
+    if (immediatePayload) {
+      state.immediateUpdatePayload = null;
+      state.queuedPayload = null;
+      state.queuedAutoRun = false;
+      state.promptUpdateMode = null;
+      $("goalInput").value = immediatePayload.goal;
+      $("transcriptInput").value = immediatePayload.transcript;
+      renderPromptOverview(immediatePayload);
+      renderPromptUpdatePanel();
+      window.setTimeout(() => runWorkflow(immediatePayload), 250);
+    } else if (nextPayload) {
       state.queuedPayload = null;
       state.queuedAutoRun = false;
       state.promptUpdateMode = null;
@@ -177,34 +194,47 @@ async function runWorkflow(payloadOverride = null) {
   }
 }
 
+function isAbortForImmediateUpdate(error) {
+  return Boolean(state.immediateUpdatePayload && (error?.name === "AbortError" || /abort/i.test(String(error?.message || ""))));
+}
+
 async function streamWorkflow(payload) {
-  const response = await fetch(apiUrl(routes.workflowRunStream), {
-    method: "POST",
-    headers: requestHeaders(),
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok || !response.body) {
-    const text = await response.text();
-    throw new Error(text || response.statusText);
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const chunks = buffer.split("\n\n");
-    buffer = chunks.pop() || "";
-    for (const chunk of chunks) {
-      handleStreamChunk(chunk);
+  const controller = new AbortController();
+  state.streamController = controller;
+  try {
+    const response = await fetch(apiUrl(routes.workflowRunStream), {
+      method: "POST",
+      headers: requestHeaders(),
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    if (!response.ok || !response.body) {
+      const text = await response.text();
+      throw new Error(text || response.statusText);
     }
-  }
 
-  if (buffer.trim()) {
-    handleStreamChunk(buffer);
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const chunks = buffer.split("\n\n");
+      buffer = chunks.pop() || "";
+      for (const chunk of chunks) {
+        handleStreamChunk(chunk);
+      }
+    }
+
+    if (buffer.trim()) {
+      handleStreamChunk(buffer);
+    }
+  } finally {
+    if (state.streamController === controller) {
+      state.streamController = null;
+    }
   }
 }
 
@@ -307,13 +337,35 @@ function samePayload(left, right) {
   return Boolean(left && right && left.goal === right.goal && left.transcript === right.transcript);
 }
 
-function queuePromptAfterFinish(autoRun) {
+function applyPromptToRunningWorkflow() {
+  const payload = readPayload();
+  if (!payload.goal && !payload.transcript) return;
+  if (!state.running) {
+    runWorkflow(payload);
+    return;
+  }
+  if (state.activeRunPayload && samePayload(payload, state.activeRunPayload)) {
+    clearQueuedPrompt();
+    return;
+  }
+  state.immediateUpdatePayload = payload;
+  state.queuedPayload = null;
+  state.queuedAutoRun = false;
+  state.promptUpdateMode = "applying";
+  renderPromptUpdatePanel();
+  addEvent({ phase: "amendment", status: "running", message: "Applying edited prompt to the active workflow by restarting the current stream." });
+  if (state.streamController) {
+    state.streamController.abort();
+  }
+}
+
+function queuePromptAfterFinish() {
   const payload = readPayload();
   if (!payload.goal && !payload.transcript) return;
   state.queuedPayload = payload;
   state.ignoredPromptPayload = null;
-  state.queuedAutoRun = autoRun;
-  state.promptUpdateMode = autoRun ? "queued-auto" : "queued-manual";
+  state.queuedAutoRun = true;
+  state.promptUpdateMode = "queued-auto";
   renderPromptUpdatePanel();
 }
 
@@ -349,32 +401,32 @@ function renderPromptUpdatePanel() {
   panel.classList.remove("hidden");
   const title = $("promptUpdateTitle");
   const message = $("promptUpdateMessage");
+  const updateButton = $("updateRunningPromptButton");
   const queueButton = $("queuePromptButton");
-  const manualButton = $("manualPromptButton");
   const clearButton = $("clearQueuedPromptButton");
 
   if (state.running) {
+    updateButton.disabled = !changedDuringRun || state.promptUpdateMode === "applying";
     queueButton.disabled = !changedDuringRun;
-    manualButton.disabled = !changedDuringRun;
-    queueButton.textContent = state.queuedAutoRun ? "Queued" : "Queue after finish";
-    manualButton.textContent = state.promptUpdateMode === "queued-manual" ? "Saved" : "Use after finish";
+    updateButton.textContent = state.promptUpdateMode === "applying" ? "Updating..." : "Update running workflow";
+    queueButton.textContent = hasQueued ? "Queued after finish" : "Run after current finish";
     clearButton.textContent = hasQueued ? "Clear queued update" : "Ignore this change";
-    title.textContent = hasQueued ? "Updated prompt is saved" : "Prompt changed during active workflow";
-    message.textContent = hasQueued
-      ? state.queuedAutoRun
-        ? "The edited prompt will run automatically when the current workflow finishes."
-        : "The edited prompt will stay ready so you can run it after the current workflow finishes."
-      : "You edited the goal/transcript while agents are running. Queue it as the next run or keep it for a manual run after completion.";
+    title.textContent = state.promptUpdateMode === "applying" ? "Updating active workflow" : hasQueued ? "Updated prompt is queued" : "Prompt changed during active workflow";
+    message.textContent = state.promptUpdateMode === "applying"
+      ? "Stopping the current stream and restarting with the edited prompt."
+      : hasQueued
+        ? "The edited prompt will run automatically after the current workflow finishes."
+        : "Use the first button to apply the edited prompt now, or run it as the next workflow after this one finishes.";
     return;
   }
 
+  updateButton.disabled = false;
   queueButton.disabled = false;
-  manualButton.disabled = false;
-  queueButton.textContent = "Run updated prompt";
-  manualButton.textContent = "Keep editing";
+  updateButton.textContent = "Run updated prompt";
+  queueButton.textContent = "Keep for later";
   clearButton.textContent = "Clear queued update";
   title.textContent = "Updated prompt is ready";
-  message.textContent = "The current workflow has finished. Run the updated prompt now, keep editing it, or clear the queued update.";
+  message.textContent = "The current workflow has finished. Run the updated prompt now, keep it in the input fields, or clear the queued update.";
 }
 
 function resetRun(payload) {
@@ -550,16 +602,16 @@ function renderPhases() {
 function phaseCard(phase) {
   const styles = statusStyles(phase.status);
   return `
-    <div class="mb-2 grid grid-cols-[36px_minmax(0,1fr)] gap-3 rounded-lg border ${styles.border} ${styles.bg} p-3 last:mb-0">
-      <span class="flex h-9 w-9 items-center justify-center rounded-md ${styles.iconBg} ${styles.text}">
-        <i data-lucide="${phase.icon}" class="h-4 w-4"></i>
+    <div class="mb-1.5 grid grid-cols-[30px_minmax(0,1fr)] gap-2 rounded-lg border ${styles.border} ${styles.bg} p-2 last:mb-0">
+      <span class="flex h-7 w-7 items-center justify-center rounded-md ${styles.iconBg} ${styles.text}">
+        <i data-lucide="${phase.icon}" class="h-3.5 w-3.5"></i>
       </span>
       <div class="min-w-0">
         <div class="flex items-center justify-between gap-2">
           <strong class="truncate text-sm leading-tight">${escapeHtml(phase.label)}</strong>
           <span class="shrink-0 text-xs font-bold uppercase tracking-normal ${styles.text}">${escapeHtml(phase.status)}</span>
         </div>
-        <p class="mt-1 break-words text-xs leading-relaxed text-muted">${escapeHtml(phase.message)}</p>
+        <p class="mt-0.5 break-words text-[11px] leading-snug text-muted">${escapeHtml(phase.message)}</p>
       </div>
     </div>
   `;
@@ -1096,8 +1148,8 @@ setMetricsEmpty();
 $("goalInput").addEventListener("input", onPromptInput);
 $("transcriptInput").addEventListener("input", onPromptInput);
 $("runWorkflowButton").addEventListener("click", () => runWorkflow());
-if ($("queuePromptButton")) $("queuePromptButton").addEventListener("click", () => (state.running ? queuePromptAfterFinish(true) : runQueuedPromptNow()));
-if ($("manualPromptButton")) $("manualPromptButton").addEventListener("click", () => (state.running ? queuePromptAfterFinish(false) : renderPromptUpdatePanel()));
+if ($("updateRunningPromptButton")) $("updateRunningPromptButton").addEventListener("click", () => (state.running ? applyPromptToRunningWorkflow() : runQueuedPromptNow()));
+if ($("queuePromptButton")) $("queuePromptButton").addEventListener("click", () => (state.running ? queuePromptAfterFinish() : renderPromptUpdatePanel()));
 if ($("clearQueuedPromptButton")) $("clearQueuedPromptButton").addEventListener("click", clearQueuedPrompt);
 if ($("overviewModeButton")) $("overviewModeButton").addEventListener("click", () => setTraceMode(false));
 if ($("traceModeButton")) $("traceModeButton").addEventListener("click", () => setTraceMode(true));
