@@ -14,6 +14,11 @@ const state = {
   traceMode: false,
   liveTasks: [],
   liveTickets: [],
+  activeRunPayload: null,
+  queuedPayload: null,
+  queuedAutoRun: false,
+  promptUpdateMode: null,
+  ignoredPromptPayload: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -133,8 +138,10 @@ async function getJson(url) {
   return response.json();
 }
 
-async function runWorkflow() {
-  const payload = readPayload();
+async function runWorkflow(payloadOverride = null) {
+  const payload = payloadOverride || readPayload();
+  state.activeRunPayload = payload;
+  state.ignoredPromptPayload = null;
   resetRun(payload);
   setLoading(true);
 
@@ -152,6 +159,20 @@ async function runWorkflow() {
     }
   } finally {
     setLoading(false);
+    const nextPayload = state.queuedAutoRun && state.queuedPayload ? state.queuedPayload : null;
+    state.activeRunPayload = null;
+    if (nextPayload) {
+      state.queuedPayload = null;
+      state.queuedAutoRun = false;
+      state.promptUpdateMode = null;
+      $("goalInput").value = nextPayload.goal;
+      $("transcriptInput").value = nextPayload.transcript;
+      renderPromptOverview(nextPayload);
+      renderPromptUpdatePanel();
+      window.setTimeout(() => runWorkflow(nextPayload), 350);
+    } else {
+      renderPromptUpdatePanel();
+    }
     renderIcons();
   }
 }
@@ -258,6 +279,102 @@ function readPayload() {
     goal: $("goalInput").value.trim(),
     transcript: $("transcriptInput").value.trim(),
   };
+}
+
+function onPromptInput() {
+  const payload = readPayload();
+  renderPromptOverview(payload);
+  if (state.running && state.activeRunPayload && !samePayload(payload, state.activeRunPayload)) {
+    if (state.ignoredPromptPayload && samePayload(payload, state.ignoredPromptPayload)) {
+      renderPromptUpdatePanel();
+      return;
+    }
+    if (!state.queuedPayload || !samePayload(payload, state.queuedPayload)) {
+      state.promptUpdateMode = "changed";
+    }
+    renderPromptUpdatePanel();
+    return;
+  }
+  if (!state.running && state.queuedPayload && !samePayload(payload, state.queuedPayload)) {
+    state.queuedPayload = null;
+    state.queuedAutoRun = false;
+    state.promptUpdateMode = null;
+  }
+  renderPromptUpdatePanel();
+}
+
+function samePayload(left, right) {
+  return Boolean(left && right && left.goal === right.goal && left.transcript === right.transcript);
+}
+
+function queuePromptAfterFinish(autoRun) {
+  const payload = readPayload();
+  if (!payload.goal && !payload.transcript) return;
+  state.queuedPayload = payload;
+  state.ignoredPromptPayload = null;
+  state.queuedAutoRun = autoRun;
+  state.promptUpdateMode = autoRun ? "queued-auto" : "queued-manual";
+  renderPromptUpdatePanel();
+}
+
+function clearQueuedPrompt() {
+  state.queuedPayload = null;
+  state.queuedAutoRun = false;
+  state.promptUpdateMode = null;
+  if (state.running && state.activeRunPayload && !samePayload(readPayload(), state.activeRunPayload)) {
+    state.ignoredPromptPayload = readPayload();
+  }
+  renderPromptUpdatePanel();
+}
+
+function runQueuedPromptNow() {
+  const payload = state.queuedPayload || readPayload();
+  $("goalInput").value = payload.goal;
+  $("transcriptInput").value = payload.transcript;
+  clearQueuedPrompt();
+  runWorkflow(payload);
+}
+
+function renderPromptUpdatePanel() {
+  const panel = $("promptUpdatePanel");
+  if (!panel) return;
+  const payload = readPayload();
+  const changedDuringRun = state.running && state.activeRunPayload && !samePayload(payload, state.activeRunPayload) && !samePayload(payload, state.ignoredPromptPayload);
+  const hasQueued = Boolean(state.queuedPayload);
+  if (!changedDuringRun && !hasQueued) {
+    panel.classList.add("hidden");
+    return;
+  }
+
+  panel.classList.remove("hidden");
+  const title = $("promptUpdateTitle");
+  const message = $("promptUpdateMessage");
+  const queueButton = $("queuePromptButton");
+  const manualButton = $("manualPromptButton");
+  const clearButton = $("clearQueuedPromptButton");
+
+  if (state.running) {
+    queueButton.disabled = !changedDuringRun;
+    manualButton.disabled = !changedDuringRun;
+    queueButton.textContent = state.queuedAutoRun ? "Queued" : "Queue after finish";
+    manualButton.textContent = state.promptUpdateMode === "queued-manual" ? "Saved" : "Use after finish";
+    clearButton.textContent = hasQueued ? "Clear queued update" : "Ignore this change";
+    title.textContent = hasQueued ? "Updated prompt is saved" : "Prompt changed during active workflow";
+    message.textContent = hasQueued
+      ? state.queuedAutoRun
+        ? "The edited prompt will run automatically when the current workflow finishes."
+        : "The edited prompt will stay ready so you can run it after the current workflow finishes."
+      : "You edited the goal/transcript while agents are running. Queue it as the next run or keep it for a manual run after completion.";
+    return;
+  }
+
+  queueButton.disabled = false;
+  manualButton.disabled = false;
+  queueButton.textContent = "Run updated prompt";
+  manualButton.textContent = "Keep editing";
+  clearButton.textContent = "Clear queued update";
+  title.textContent = "Updated prompt is ready";
+  message.textContent = "The current workflow has finished. Run the updated prompt now, keep editing it, or clear the queued update.";
 }
 
 function resetRun(payload) {
@@ -974,10 +1091,14 @@ renderLogStream();
 renderTracePanel();
 updateLiveAgent();
 setTraceMode(false);
+renderPromptUpdatePanel();
 setMetricsEmpty();
-$("goalInput").addEventListener("input", () => renderPromptOverview(readPayload()));
-$("transcriptInput").addEventListener("input", () => renderPromptOverview(readPayload()));
-$("runWorkflowButton").addEventListener("click", runWorkflow);
+$("goalInput").addEventListener("input", onPromptInput);
+$("transcriptInput").addEventListener("input", onPromptInput);
+$("runWorkflowButton").addEventListener("click", () => runWorkflow());
+if ($("queuePromptButton")) $("queuePromptButton").addEventListener("click", () => (state.running ? queuePromptAfterFinish(true) : runQueuedPromptNow()));
+if ($("manualPromptButton")) $("manualPromptButton").addEventListener("click", () => (state.running ? queuePromptAfterFinish(false) : renderPromptUpdatePanel()));
+if ($("clearQueuedPromptButton")) $("clearQueuedPromptButton").addEventListener("click", clearQueuedPrompt);
 if ($("overviewModeButton")) $("overviewModeButton").addEventListener("click", () => setTraceMode(false));
 if ($("traceModeButton")) $("traceModeButton").addEventListener("click", () => setTraceMode(true));
 if ($("configButton")) $("configButton").addEventListener("click", checkConfig);
