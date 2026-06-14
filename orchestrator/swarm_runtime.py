@@ -36,7 +36,20 @@ class SwarmRuntime:
         self.store = store or CosmosClient()
 
     async def run_goal(self, goal: str, progress: ProgressCallback | None = None) -> dict:
-        await _publish(progress, {"phase": "planning", "status": "running", "message": "PM agent is creating the task DAG."})
+        await _publish(
+            progress,
+            {
+                "phase": "planning",
+                "status": "running",
+                "message": "PM agent is creating the task DAG.",
+                "details": {
+                    "orchestrator": "SwarmRuntime",
+                    "operation": "create_plan",
+                    "planner_provider": self.pm.planner.llm.provider,
+                    "goal_chars": len(goal),
+                },
+            },
+        )
         dag = await self.pm.create_plan(goal)
         for task in dag.tasks:
             task.metadata.setdefault("dag_id", dag.dag_id)
@@ -48,18 +61,48 @@ class SwarmRuntime:
                 "status": "complete",
                 "message": f"PM agent created {len(dag.tasks)} dependent tasks.",
                 "tasks": [task.to_dict() for task in dag.tasks],
+                "details": {
+                    "dag_id": dag.dag_id,
+                    "task_count": len(dag.tasks),
+                    "planner_source": dag.tasks[0].metadata.get("planner_source") if dag.tasks else "unknown",
+                    "dependencies": {task.task_id: task.depends_on for task in dag.tasks},
+                },
             },
         )
         history: list[dict] = []
         await self._persist_tasks(dag)
         await self._execute_dag(dag, history, progress)
 
-        await _publish(progress, {"phase": "memory", "status": "running", "message": "Persisting DAG and execution history."})
+        await _publish(
+            progress,
+            {
+                "phase": "memory",
+                "status": "running",
+                "message": "Persisting DAG and execution history.",
+                "details": {"dag_id": dag.dag_id, "history_messages": len(history), "task_count": len(dag.tasks)},
+            },
+        )
         await self.store.upsert("TaskDAGs", dag.to_dict())
         await self._persist_tasks(dag)
-        await _publish(progress, {"phase": "reflection", "status": "running", "message": "Reflection agent is reviewing the run."})
+        await _publish(
+            progress,
+            {
+                "phase": "reflection",
+                "status": "running",
+                "message": "Reflection agent is reviewing the run.",
+                "details": {"dag_id": dag.dag_id, "history_messages": len(history)},
+            },
+        )
         reflection = await self.reflection.reflect(history, dag.dag_id)
-        await _publish(progress, {"phase": "reflection", "status": "complete", "message": "Reflection agent produced improvement notes."})
+        await _publish(
+            progress,
+            {
+                "phase": "reflection",
+                "status": "complete",
+                "message": "Reflection agent produced improvement notes.",
+                "details": {"dag_id": dag.dag_id, "improvement": reflection.get("improvement"), "best_agent": reflection.get("best_agent")},
+            },
+        )
         return {
             "dag": dag.to_dict(),
             "history": history,
@@ -98,6 +141,7 @@ class SwarmRuntime:
                     "phase": "ticket-execution",
                     "status": "running",
                     "message": f"Executing queued ticket: {msg.payload.get('title', msg.task_id)}",
+                    "details": {"queue": queue or self.pm.bus.default_task_queue, "message": self._message_trace(msg)},
                 },
             )
             executions.append(await self.process_message(msg))
@@ -187,6 +231,13 @@ class SwarmRuntime:
                         "message": f"{task.assigned_to} task {task.status}: {task.title}",
                         "task": task.to_dict(),
                         "gate": result["gate"],
+                        "details": {
+                            "dag_id": dag.dag_id,
+                            "task": self._task_trace(task),
+                            "gate": result["gate"],
+                            "validation": result["validated"].payload.get("validation", {}),
+                            "confidence": result["validated"].confidence,
+                        },
                     },
                 )
                 history.extend(
@@ -199,6 +250,31 @@ class SwarmRuntime:
 
     def _has_pending_approval(self, dag: TaskDAG) -> bool:
         return any(task.status == "blocked" and task.metadata.get("gate") == "awaiting_human" for task in dag.tasks)
+
+    def _task_trace(self, task: TaskNode) -> dict[str, Any]:
+        return {
+            "task_id": task.task_id,
+            "title": task.title,
+            "assigned_to": task.assigned_to,
+            "status": task.status,
+            "confidence": task.confidence,
+            "depends_on": task.depends_on,
+            "metadata": task.metadata,
+        }
+
+    def _message_trace(self, msg: AgentMessage) -> dict[str, Any]:
+        output = msg.payload.get("output", {}) if isinstance(msg.payload, dict) else {}
+        return {
+            "message_id": msg.task_id,
+            "type": msg.type,
+            "status": msg.status,
+            "assigned_to": msg.assigned_to,
+            "confidence": msg.confidence,
+            "llm_provider": msg.metadata.get("llm_provider"),
+            "llm_used": msg.metadata.get("llm_used"),
+            "prompt": msg.metadata.get("prompt"),
+            "output_keys": sorted(output.keys()) if isinstance(output, dict) else [],
+        }
 
     async def _persist_task(self, dag_id: str, task: TaskNode) -> None:
         await self.store.upsert("Tasks", {"dag_id": dag_id, **task.to_dict()})
@@ -230,6 +306,7 @@ class SwarmRuntime:
                     "status": "blocked",
                     "message": f"Blocked downstream task: {task.title}",
                     "task": task.to_dict(),
+                    "details": {"dag_id": dag.dag_id, "task": self._task_trace(task), "reason": task.metadata.get("blocked_reason")},
                 },
             )
 
@@ -242,6 +319,7 @@ class SwarmRuntime:
                 "status": "running",
                 "message": f"{task.assigned_to} started: {task.title}",
                 "task": task.to_dict(),
+                "details": {"dag_id": dag.dag_id, "task": self._task_trace(task), "operation": "execute_task"},
             },
         )
         msg = AgentMessage(
@@ -261,6 +339,13 @@ class SwarmRuntime:
                 "message": f"Executor completed: {task.title}",
                 "task": task.to_dict(),
                 "confidence": executed.confidence,
+                "details": {
+                    "dag_id": dag.dag_id,
+                    "task": self._task_trace(task),
+                    "executor": self._message_trace(executed),
+                    "output_summary": executed.payload.get("output", {}).get("summary"),
+                    "artifacts": executed.payload.get("output", {}).get("artifacts", []),
+                },
             },
         )
         validated = await self.validator.validate(executed)
@@ -272,6 +357,12 @@ class SwarmRuntime:
                 "message": f"Validator returned {validated.payload.get('validation', {}).get('verdict', 'review')}: {task.title}",
                 "task": task.to_dict(),
                 "confidence": validated.confidence,
+                "details": {
+                    "dag_id": dag.dag_id,
+                    "task": self._task_trace(task),
+                    "validator": self._message_trace(validated),
+                    "validation": validated.payload.get("validation", {}),
+                },
             },
         )
         gate_result = await self.gate.evaluate(validated, context={"dag_id": dag.dag_id, "task_id": task.task_id})

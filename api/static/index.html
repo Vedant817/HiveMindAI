@@ -105,9 +105,15 @@
 
         <section class="grid min-w-0 gap-4 xl:grid-cols-[0.72fr_1.28fr]">
           <article class="rounded-xl border border-line bg-white p-4 shadow-soft">
-            <div class="mb-3">
-              <p class="text-xs font-bold uppercase tracking-[0.14em] text-teal">Current status</p>
-              <h2 class="text-xl font-bold leading-tight" id="activeAgentName">Waiting for run</h2>
+            <div class="mb-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div class="min-w-0">
+                <p class="text-xs font-bold uppercase tracking-[0.14em] text-teal">Current status</p>
+                <h2 class="text-xl font-bold leading-tight" id="activeAgentName">Waiting for run</h2>
+              </div>
+              <div class="inline-flex shrink-0 rounded-lg border border-line bg-paper p-1 text-xs font-bold" aria-label="Trace display mode">
+                <button class="rounded-md bg-white px-2.5 py-1 text-ink shadow-sm" id="overviewModeButton" type="button">Overview</button>
+                <button class="rounded-md px-2.5 py-1 text-muted" id="traceModeButton" type="button">Internal trace</button>
+              </div>
             </div>
             <p class="min-h-12 text-sm leading-relaxed text-muted" id="activeAgentMessage">Start a workflow to watch agent status and backend events stream in real time.</p>
             <div class="mt-4 grid grid-cols-2 gap-3 text-sm">
@@ -133,6 +139,18 @@
               <div class="text-slate-500">$ waiting for agent stream...</div>
             </div>
           </article>
+        </section>
+
+        <section class="hidden rounded-xl border border-line bg-white p-4 shadow-soft" id="internalTraceSection">
+          <div class="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <p class="text-xs font-bold uppercase tracking-[0.14em] text-teal">Internal processing</p>
+              <h2 class="text-xl font-bold leading-tight">Orchestrator and model trace</h2>
+            </div>
+            <span class="text-sm font-semibold text-muted" id="traceCount">0 trace events</span>
+          </div>
+          <p class="mb-3 text-sm leading-relaxed text-muted">Shows safe runtime metadata, task payloads, gates, validation checks, model provider usage, and artifact paths. It does not expose hidden chain-of-thought or secrets.</p>
+          <div class="grid max-h-[34rem] gap-3 overflow-y-auto pr-1" id="internalTraceView"></div>
         </section>
 
         <section class="rounded-xl border border-line bg-white p-4 shadow-soft">

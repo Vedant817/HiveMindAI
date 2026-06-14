@@ -140,6 +140,9 @@ class PlannerAgent:
         tasks.append(validation)
         dag = TaskDAG(goal=normalized, tasks=tasks)
         dag.validate()
+        for task in dag.tasks:
+            task.metadata.setdefault("planner_source", "local_rules")
+            task.metadata.setdefault("planner_provider", getattr(self.llm, "provider", "custom"))
         return dag
 
     def _extract_themes(self, goal: str) -> dict[str, str]:
@@ -169,6 +172,7 @@ class PlannerAgent:
                 description=description,
                 assigned_to=str(row.get("assigned_to") or "Executor"),
                 confidence=max(0.0, min(1.0, float(row.get("confidence", planner_default_confidence())))),
+                metadata={"planner_source": "llm", "planner_provider": getattr(self.llm, "provider", "custom")},
             )
             nodes.append(node)
             title_to_id[node.title] = node.task_id

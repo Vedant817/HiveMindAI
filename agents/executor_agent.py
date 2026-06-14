@@ -42,6 +42,7 @@ class ExecutorAgent:
                     status="done",
                     parent_task_id=msg.task_id,
                     jira_ticket_id=msg.jira_ticket_id,
+                    metadata={"llm_provider": self.llm.provider, "llm_used": True, "prompt": "executor_json"},
                 )
             except (TypeError, ValueError):
                 pass
@@ -65,6 +66,7 @@ class ExecutorAgent:
             status="done",
             parent_task_id=msg.task_id,
             jira_ticket_id=msg.jira_ticket_id,
+            metadata={"llm_provider": self.llm.provider, "llm_used": False, "prompt": "local_artifact_fallback"},
         )
 
     def _with_artifacts(self, task: dict, output: dict) -> dict:

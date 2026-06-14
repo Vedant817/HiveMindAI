@@ -10,6 +10,8 @@ const state = {
   running: false,
   configChecking: false,
   logLines: [],
+  traceEvents: [],
+  traceMode: false,
   liveTasks: [],
   liveTickets: [],
 };
@@ -261,6 +263,7 @@ function readPayload() {
 function resetRun(payload) {
   state.events = [];
   state.logLines = [];
+  state.traceEvents = [];
   state.liveTasks = [];
   state.liveTickets = [];
   state.activePhaseKey = null;
@@ -272,6 +275,7 @@ function resetRun(payload) {
   renderPipelineMap();
   renderEventFeed();
   renderLogStream();
+  renderTracePanel();
   setMetricsEmpty();
   setEmpty("dagView", "The PM agent will render the task graph here.");
   setEmpty("ticketView", "The meeting agent will render extracted tickets here.");
@@ -514,9 +518,12 @@ function addEvent(event) {
     type: event.type || "stage",
   };
   state.events.unshift(entry);
+  state.traceEvents.unshift({ ...entry, raw: buildTracePayload(event) });
   addLogLine(entry);
   state.events = state.events.slice(0, 80);
+  state.traceEvents = state.traceEvents.slice(0, 80);
   renderEventFeed();
+  renderTracePanel();
   if (!state.lastRun || state.running) {
     renderRealtimeTimeline();
   }
@@ -669,6 +676,124 @@ function renderDebate(debate) {
       )
       .join("")}
   `;
+}
+
+function setTraceMode(enabled) {
+  state.traceMode = enabled;
+  if ($("internalTraceSection")) {
+    $("internalTraceSection").classList.toggle("hidden", !enabled);
+  }
+  if ($("overviewModeButton")) {
+    $("overviewModeButton").className = enabled
+      ? "rounded-md px-2.5 py-1 text-muted"
+      : "rounded-md bg-white px-2.5 py-1 text-ink shadow-sm";
+  }
+  if ($("traceModeButton")) {
+    $("traceModeButton").className = enabled
+      ? "rounded-md bg-white px-2.5 py-1 text-ink shadow-sm"
+      : "rounded-md px-2.5 py-1 text-muted";
+  }
+  renderTracePanel();
+}
+
+function buildTracePayload(event) {
+  const trace = {
+    type: event.type || "stage",
+    phase: event.phase || "swarm",
+    status: normalizeStatus(event.status || "running"),
+    message: event.message || "Agent event received.",
+  };
+  if (event.details) trace.details = redactTrace(event.details);
+  if (event.confidence !== undefined) trace.confidence = event.confidence;
+  if (event.gate) trace.gate = event.gate;
+  if (event.task) trace.task = compactTask(event.task);
+  if (event.tasks) trace.tasks = event.tasks.map(compactTask);
+  if (event.tickets) trace.tickets = event.tickets.map(compactTicket);
+  if (event.debate) trace.debate = { winner: event.debate.winner, proposal_count: event.debate.proposals?.length || 0 };
+  if (event.config) trace.config = {
+    app_stack: event.config.app_stack,
+    llm_provider: event.config.llm_provider,
+    llm_configured: event.config.llm_configured,
+    local_fallbacks_enabled: event.config.local_fallbacks_enabled,
+  };
+  if (event.data) trace.result = {
+    mode: event.data.mode,
+    complete: event.data.swarm?.complete,
+    task_count: event.data.swarm?.dag?.tasks?.length || 0,
+    history_messages: event.data.swarm?.history?.length || 0,
+    tickets_created: event.data.meeting?.count || 0,
+    ticket_executions: event.data.ticket_executions?.count || 0,
+    metrics: event.data.metrics,
+  };
+  return trace;
+}
+
+function compactTask(task) {
+  return {
+    task_id: task.task_id,
+    title: task.title,
+    assigned_to: task.assigned_to,
+    status: task.status,
+    confidence: task.confidence,
+    depends_on: task.depends_on || [],
+    metadata: redactTrace(task.metadata || {}),
+  };
+}
+
+function compactTicket(row) {
+  const ticket = row.ticket || row;
+  return {
+    title: ticket.title,
+    priority: ticket.priority,
+    jira_ticket_id: ticket.jira_ticket_id,
+    needs_review: ticket.needs_review,
+    sequence: ticket.sequence,
+  };
+}
+
+function redactTrace(value) {
+  if (Array.isArray(value)) return value.map(redactTrace);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => {
+      const lower = key.toLowerCase();
+      if (lower.includes("key") || lower.includes("token") || lower.includes("secret") || lower.includes("password")) {
+        return [key, "[redacted]"];
+      }
+      return [key, redactTrace(entry)];
+    }),
+  );
+}
+
+function renderTracePanel() {
+  if (!$("internalTraceView")) return;
+  if ($("traceCount")) {
+    $("traceCount").textContent = `${state.traceEvents.length} trace event${state.traceEvents.length === 1 ? "" : "s"}`;
+  }
+  if (!state.traceEvents.length) {
+    $("internalTraceView").innerHTML = `<div class="rounded-lg border border-dashed border-line p-4 text-sm text-muted">Run a workflow to inspect orchestrator and model metadata.</div>`;
+    return;
+  }
+  $("internalTraceView").innerHTML = state.traceEvents
+    .map((event, index) => {
+      const styles = statusStyles(event.status);
+      const json = JSON.stringify(event.raw, null, 2);
+      return `
+        <details class="rounded-lg border ${styles.border} bg-white p-3" ${index < 4 ? "open" : ""}>
+          <summary class="cursor-pointer list-none">
+            <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div class="min-w-0">
+                <span class="${badgeClass(event.status)}">${escapeHtml(event.phase)}</span>
+                <strong class="ml-2 break-words text-sm leading-tight">${escapeHtml(event.message)}</strong>
+              </div>
+              <span class="shrink-0 text-xs text-muted">${escapeHtml(event.createdAt)}</span>
+            </div>
+          </summary>
+          <pre class="mt-3 max-h-80 overflow-auto rounded-md bg-slate-950 p-3 text-xs leading-relaxed text-slate-100">${escapeHtml(json)}</pre>
+        </details>
+      `;
+    })
+    .join("");
 }
 
 function renderConfig(config) {
@@ -846,10 +971,14 @@ renderPhases();
 renderPipelineMap();
 renderEventFeed();
 renderLogStream();
+renderTracePanel();
 updateLiveAgent();
+setTraceMode(false);
 setMetricsEmpty();
 $("goalInput").addEventListener("input", () => renderPromptOverview(readPayload()));
 $("transcriptInput").addEventListener("input", () => renderPromptOverview(readPayload()));
 $("runWorkflowButton").addEventListener("click", runWorkflow);
+if ($("overviewModeButton")) $("overviewModeButton").addEventListener("click", () => setTraceMode(false));
+if ($("traceModeButton")) $("traceModeButton").addEventListener("click", () => setTraceMode(true));
 if ($("configButton")) $("configButton").addEventListener("click", checkConfig);
 Promise.all([loadDefaults(), checkConfig()]).finally(renderIcons);

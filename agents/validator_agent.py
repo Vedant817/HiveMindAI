@@ -36,6 +36,7 @@ class ValidatorAgent:
                     status="done" if passed else "failed",
                     parent_task_id=msg.task_id,
                     jira_ticket_id=msg.jira_ticket_id,
+                    metadata={"llm_provider": self.llm.provider, "llm_used": True, "prompt": "validator_json"},
                 )
             except (TypeError, ValueError):
                 pass
@@ -56,6 +57,7 @@ class ValidatorAgent:
             status="done" if passed else "failed",
             parent_task_id=msg.task_id,
             jira_ticket_id=msg.jira_ticket_id,
+            metadata={"llm_provider": self.llm.provider, "llm_used": False, "prompt": "deterministic_artifact_checks"},
         )
 
     def _deterministic_issues(self, msg: AgentMessage) -> list[str]:
