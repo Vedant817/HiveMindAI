@@ -10,6 +10,8 @@ const state = {
   running: false,
   configChecking: false,
   logLines: [],
+  liveTasks: [],
+  liveTickets: [],
 };
 
 const $ = (id) => document.getElementById(id);
@@ -47,9 +49,9 @@ const pipelineDefinitions = [
   { key: "summary", label: "Outputs", detail: "Tickets and report", icon: "send" },
 ];
 
-const emptyClass = "flex min-h-56 items-center justify-center rounded-2xl border border-dashed border-line p-4 text-center text-muted";
+const emptyClass = "flex min-h-56 items-center justify-center rounded-lg border border-dashed border-line p-4 text-center text-muted";
 const contentClass = "grid max-h-[30rem] gap-2 overflow-y-auto pr-1";
-const itemBaseClass = "rounded-2xl border border-line bg-white p-3 shadow-sm";
+const itemBaseClass = "rounded-lg border border-line bg-white p-3 shadow-sm";
 const titleClass = "font-black leading-tight text-ink";
 const metaClass = "mt-1 text-sm leading-relaxed text-muted";
 
@@ -69,7 +71,7 @@ function initPhaseState() {
 function setLoading(isLoading) {
   state.running = isLoading;
   $("runWorkflowButton").disabled = isLoading;
-  $("configButton").disabled = isLoading || state.configChecking;
+  if ($("configButton")) $("configButton").disabled = isLoading || state.configChecking;
   $("runWorkflowButton").querySelector("span").textContent = isLoading ? "Running..." : "Run workflow";
   renderRunStatePill();
   updateLiveAgent();
@@ -82,9 +84,11 @@ function setLoading(isLoading) {
 
 function setConfigChecking(isChecking) {
   state.configChecking = isChecking;
-  $("configButton").disabled = isChecking || state.running;
+  if ($("configButton")) {
+    $("configButton").disabled = isChecking || state.running;
+    $("configButton").querySelector("span").textContent = isChecking ? "Checking..." : "Check config";
+  }
   $("runWorkflowButton").disabled = state.running;
-  $("configButton").querySelector("span").textContent = isChecking ? "Checking..." : "Check config";
   renderRunStatePill();
 }
 
@@ -257,6 +261,8 @@ function readPayload() {
 function resetRun(payload) {
   state.events = [];
   state.logLines = [];
+  state.liveTasks = [];
+  state.liveTickets = [];
   state.activePhaseKey = null;
   state.runStartedAt = Date.now();
   state.lastEventAt = Date.now();
@@ -278,10 +284,12 @@ function resetRun(payload) {
 
 function renderAll(data) {
   renderMode(data.mode);
+  state.liveTasks = data.swarm?.dag?.tasks || [];
+  state.liveTickets = data.meeting?.tickets || [];
   renderMetrics(data.metrics);
   renderPromptOverview({ goal: data.goal, transcript: $("transcriptInput").value.trim() });
-  renderDag(data.swarm.dag.tasks);
-  renderTickets(data.meeting.tickets);
+  renderDag(state.liveTasks);
+  renderTickets(state.liveTickets);
   renderTimeline(data.swarm.history);
   renderDebate(data.debate);
   $("summaryView").textContent = data.summary;
@@ -291,14 +299,21 @@ function renderAll(data) {
 
 function renderPartialEvent(event) {
   if (event.tasks) {
-    renderDag(event.tasks);
+    state.liveTasks = event.tasks;
+    renderDag(state.liveTasks);
+  }
+  if (event.task) {
+    upsertLiveTask(event.task);
+    renderDag(state.liveTasks);
   }
   if (event.tickets) {
-    renderTickets(event.tickets);
+    state.liveTickets = event.tickets;
+    renderTickets(state.liveTickets);
   }
   if (event.debate) {
     renderDebate(event.debate);
   }
+  renderLiveMetrics();
 }
 
 function renderMode(mode) {
@@ -332,6 +347,34 @@ function renderMetrics(metrics) {
   $("agentMetric").textContent = String(metrics.agents_involved.length);
 }
 
+function renderLiveMetrics() {
+  const tasks = state.liveTasks || [];
+  const tickets = state.liveTickets || [];
+  if (!tasks.length && !tickets.length) return;
+  const total = tasks.length;
+  const done = tasks.filter((task) => normalizeStatus(task.status) === "complete").length;
+  const failed = tasks.filter((task) => normalizeStatus(task.status) === "failed").length;
+  const health = total ? Math.round((done / total) * 100) : 0;
+  const agents = new Set(tasks.map((task) => task.assigned_to).filter(Boolean));
+  $("healthMetric").textContent = total ? `${health}%` : "--";
+  $("taskMetric").textContent = total ? `${done}/${total}` : "--";
+  $("ticketMetric").textContent = String(tickets.length || 0);
+  $("agentMetric").textContent = String(agents.size || (total ? 1 : 0));
+  if (failed && total) {
+    $("healthMetric").textContent = `${health}%`;
+  }
+}
+
+function upsertLiveTask(task) {
+  const id = task.task_id || task.title;
+  const index = state.liveTasks.findIndex((row) => (row.task_id || row.title) === id);
+  if (index >= 0) {
+    state.liveTasks[index] = { ...state.liveTasks[index], ...task };
+  } else {
+    state.liveTasks.push(task);
+  }
+}
+
 function setMetricsEmpty() {
   $("healthMetric").textContent = "--";
   $("taskMetric").textContent = "--";
@@ -357,7 +400,7 @@ function renderPromptOverview(payload) {
 
 function promptCard(title, body, icon) {
   return `
-    <div class="min-w-0 rounded-2xl border border-line bg-[#fbfcfa] p-3">
+    <div class="min-w-0 rounded-lg border border-line bg-[#fbfcfa] p-3">
       <div class="mb-2 flex items-center gap-2 text-sm font-bold">
         <i data-lucide="${icon}" class="h-4 w-4 text-teal"></i>
         <span>${escapeHtml(title)}</span>
@@ -386,8 +429,8 @@ function renderPhases() {
 function phaseCard(phase) {
   const styles = statusStyles(phase.status);
   return `
-    <div class="mb-2 grid grid-cols-[36px_minmax(0,1fr)] gap-3 rounded-2xl border ${styles.border} ${styles.bg} p-3 last:mb-0">
-      <span class="flex h-9 w-9 items-center justify-center rounded-xl ${styles.iconBg} ${styles.text}">
+    <div class="mb-2 grid grid-cols-[36px_minmax(0,1fr)] gap-3 rounded-lg border ${styles.border} ${styles.bg} p-3 last:mb-0">
+      <span class="flex h-9 w-9 items-center justify-center rounded-md ${styles.iconBg} ${styles.text}">
         <i data-lucide="${phase.icon}" class="h-4 w-4"></i>
       </span>
       <div class="min-w-0">
@@ -407,7 +450,7 @@ function renderPipelineMap() {
       const phase = state.phases[item.key] || { status: "pending" };
       const styles = statusStyles(phase.status);
       return `
-        <div class="min-h-32 rounded-2xl border ${styles.border} ${styles.bg} p-3 transition hover:-translate-y-0.5 hover:shadow-soft">
+        <div class="min-h-32 rounded-lg border ${styles.border} ${styles.bg} p-3 transition hover:-translate-y-0.5 hover:shadow-soft">
           <div class="flex items-center justify-between gap-2">
             <i data-lucide="${item.icon}" class="h-5 w-5 ${styles.text}"></i>
             <span class="text-xs font-bold uppercase tracking-normal ${styles.text}">${escapeHtml(phase.status)}</span>
@@ -474,6 +517,9 @@ function addEvent(event) {
   addLogLine(entry);
   state.events = state.events.slice(0, 80);
   renderEventFeed();
+  if (!state.lastRun || state.running) {
+    renderRealtimeTimeline();
+  }
 }
 
 function startHeartbeat() {
@@ -506,14 +552,14 @@ function renderEventFeed() {
   if (!$("eventFeed") || !$("eventCount")) return;
   $("eventCount").textContent = `${state.events.length} event${state.events.length === 1 ? "" : "s"}`;
   if (!state.events.length) {
-    $("eventFeed").innerHTML = `<div class="rounded-2xl border border-dashed border-line p-3 text-sm text-muted">Run the workflow to see live backend events.</div>`;
+    $("eventFeed").innerHTML = `<div class="rounded-lg border border-dashed border-line p-3 text-sm text-muted">Run the workflow to see live backend events.</div>`;
     return;
   }
   $("eventFeed").innerHTML = state.events
     .map((event) => {
       const styles = statusStyles(event.status);
       return `
-        <div class="mb-2 rounded-2xl border ${styles.border} bg-white p-3 last:mb-0">
+        <div class="mb-2 rounded-lg border ${styles.border} bg-white p-3 last:mb-0">
           <div class="flex items-center justify-between gap-2">
             <span class="text-xs font-bold uppercase tracking-normal ${styles.text}">${escapeHtml(event.phase)}</span>
             <span class="text-xs text-muted">${escapeHtml(event.createdAt)}</span>
@@ -566,7 +612,7 @@ function renderTimeline(history) {
   $("timelineView").innerHTML = history
     .map(
       (msg) => `
-        <div class="grid gap-3 rounded-2xl border border-line bg-white p-3 sm:grid-cols-[88px_minmax(0,1fr)_64px] sm:items-center">
+        <div class="grid gap-3 rounded-lg border border-line bg-white p-3 sm:grid-cols-[88px_minmax(0,1fr)_64px] sm:items-center">
           <span class="${badgeClass(msg.status)}">${escapeHtml(msg.type)}</span>
           <div class="min-w-0">
             <div class="${titleClass}">${escapeHtml(msg.payload.title || "Agent event")}</div>
@@ -576,6 +622,30 @@ function renderTimeline(history) {
         </div>
       `,
     )
+    .join("");
+}
+
+function renderRealtimeTimeline() {
+  if (!$("timelineView")) return;
+  const rows = state.events.slice(0, 30);
+  $("timelineView").className = "grid max-h-[34rem] gap-2 overflow-y-auto pr-1";
+  if (!rows.length) {
+    setEmpty("timelineView", "Execution events will appear as agents complete work.");
+    return;
+  }
+  $("timelineView").innerHTML = rows
+    .map((event) => {
+      const styles = statusStyles(event.status);
+      return `
+        <div class="rounded-lg border ${styles.border} bg-white p-3">
+          <div class="flex items-center justify-between gap-2">
+            <span class="${badgeClass(event.status)}">${escapeHtml(event.phase)}</span>
+            <span class="text-xs text-muted">${escapeHtml(event.createdAt)}</span>
+          </div>
+          <p class="mt-2 break-words text-sm leading-relaxed text-ink">${escapeHtml(event.message)}</p>
+        </div>
+      `;
+    })
     .join("");
 }
 
@@ -602,9 +672,10 @@ function renderDebate(debate) {
 }
 
 function renderConfig(config) {
+  if (!$("configView")) return;
   const integrations = config.integrations || {};
   if ($("configEyebrow")) {
-    $("configEyebrow").textContent = config.app_stack === "azure" ? "Production readiness" : "Stack readiness";
+    $("configEyebrow").textContent = config.app_stack === "azure" ? "Production readiness" : "Readiness";
   }
   if ($("configTitle")) {
     $("configTitle").textContent = config.stack_label || "Configuration check";
@@ -659,7 +730,7 @@ function renderLogStream() {
   $("liveLogStream").innerHTML = state.logLines
     .map((line) => {
       const color = line.status === "complete" ? "text-emerald-300" : line.status === "failed" ? "text-rose-300" : "text-cyan-200";
-      return `<div class="mb-2 rounded-xl border border-white/5 bg-white/[0.03] p-2 sm:grid sm:grid-cols-[74px_18px_112px_minmax(0,1fr)] sm:gap-2">
+      return `<div class="mb-2 rounded-md border border-slate-800 bg-slate-900 p-2 sm:grid sm:grid-cols-[74px_18px_112px_minmax(0,1fr)] sm:gap-2">
         <span class="mr-2 text-slate-500">${escapeHtml(line.timestamp)}</span>
         <span class="mr-2 ${color}">${escapeHtml(line.prefix)}</span>
         <span class="mr-2 inline-block max-w-full truncate uppercase tracking-wide ${color}">${escapeHtml(line.phase)}</span>
@@ -780,5 +851,5 @@ setMetricsEmpty();
 $("goalInput").addEventListener("input", () => renderPromptOverview(readPayload()));
 $("transcriptInput").addEventListener("input", () => renderPromptOverview(readPayload()));
 $("runWorkflowButton").addEventListener("click", runWorkflow);
-$("configButton").addEventListener("click", checkConfig);
+if ($("configButton")) $("configButton").addEventListener("click", checkConfig);
 Promise.all([loadDefaults(), checkConfig()]).finally(renderIcons);
