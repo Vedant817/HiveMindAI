@@ -8,6 +8,8 @@ const state = {
   runStartedAt: null,
   lastEventAt: null,
   running: false,
+  configChecking: false,
+  logLines: [],
 };
 
 const $ = (id) => document.getElementById(id);
@@ -45,10 +47,10 @@ const pipelineDefinitions = [
   { key: "summary", label: "Outputs", detail: "Tickets and report", icon: "send" },
 ];
 
-const emptyClass = "flex min-h-56 items-center justify-center rounded-md border border-dashed border-line p-4 text-center text-muted";
-const contentClass = "grid gap-2";
-const itemBaseClass = "rounded-md border border-line bg-white p-3 shadow-sm";
-const titleClass = "font-bold leading-tight text-ink";
+const emptyClass = "flex min-h-56 items-center justify-center rounded-2xl border border-dashed border-line p-4 text-center text-muted";
+const contentClass = "grid max-h-[30rem] gap-2 overflow-y-auto pr-1";
+const itemBaseClass = "rounded-2xl border border-line bg-white p-3 shadow-sm";
+const titleClass = "font-black leading-tight text-ink";
 const metaClass = "mt-1 text-sm leading-relaxed text-muted";
 
 function initPhaseState() {
@@ -67,12 +69,10 @@ function initPhaseState() {
 function setLoading(isLoading) {
   state.running = isLoading;
   $("runWorkflowButton").disabled = isLoading;
-  $("configButton").disabled = isLoading;
+  $("configButton").disabled = isLoading || state.configChecking;
   $("runWorkflowButton").querySelector("span").textContent = isLoading ? "Running..." : "Run workflow";
-  $("runStatePill").textContent = isLoading ? "Running live stream" : "Idle";
-  $("runStatePill").className = isLoading
-    ? "inline-flex min-h-9 items-center rounded-full border border-teal/40 bg-teal/10 px-3 text-sm font-semibold text-teal"
-    : "inline-flex min-h-9 items-center rounded-full border border-line bg-paper px-3 text-sm font-semibold text-muted";
+  renderRunStatePill();
+  updateLiveAgent();
   if (isLoading) {
     startHeartbeat();
   } else {
@@ -80,10 +80,35 @@ function setLoading(isLoading) {
   }
 }
 
+function setConfigChecking(isChecking) {
+  state.configChecking = isChecking;
+  $("configButton").disabled = isChecking || state.running;
+  $("runWorkflowButton").disabled = state.running;
+  $("configButton").querySelector("span").textContent = isChecking ? "Checking..." : "Check config";
+  renderRunStatePill();
+}
+
+function renderRunStatePill() {
+  const pill = $("runStatePill");
+  if (state.running) {
+    pill.innerHTML = `<span class="h-2 w-2 animate-pulse rounded-full bg-teal"></span>Running live stream`;
+    pill.className = "inline-flex min-h-9 items-center gap-2 rounded-full border border-teal/40 bg-teal/10 px-3 text-sm font-bold text-teal shadow-sm";
+    return;
+  }
+  if (state.configChecking) {
+    pill.innerHTML = `<span class="h-2 w-2 animate-pulse rounded-full bg-amber"></span>Checking config`;
+    pill.className = "inline-flex min-h-9 items-center gap-2 rounded-full border border-amber/40 bg-amber/10 px-3 text-sm font-bold text-amber shadow-sm";
+    return;
+  }
+  pill.innerHTML = `<span class="h-2 w-2 rounded-full bg-muted"></span>Idle`;
+  pill.className = "inline-flex min-h-9 items-center gap-2 rounded-full border border-line bg-white px-3 text-sm font-bold text-muted shadow-sm";
+}
+
+
 async function postJson(url, body) {
   const response = await fetch(apiUrl(url), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: requestHeaders(),
     body: JSON.stringify(body),
   });
   if (!response.ok) {
@@ -94,7 +119,7 @@ async function postJson(url, body) {
 }
 
 async function getJson(url) {
-  const response = await fetch(apiUrl(url));
+  const response = await fetch(apiUrl(url), { headers: requestHeaders(false) });
   if (!response.ok) {
     const text = await response.text();
     throw new Error(text || response.statusText);
@@ -128,7 +153,7 @@ async function runWorkflow() {
 async function streamWorkflow(payload) {
   const response = await fetch(apiUrl(routes.workflowRunStream), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: requestHeaders(),
     body: JSON.stringify(payload),
   });
   if (!response.ok || !response.body) {
@@ -157,11 +182,22 @@ async function streamWorkflow(payload) {
 }
 
 function handleStreamChunk(chunk) {
-  const line = chunk
+  const payload = chunk
     .split("\n")
-    .find((row) => row.startsWith("data:"));
-  if (!line) return;
-  const event = JSON.parse(line.replace(/^data:\s*/, ""));
+    .filter((row) => row.startsWith("data:"))
+    .map((row) => row.replace(/^data:\s?/, ""))
+    .join("\n")
+    .trim();
+  if (!payload) return;
+
+  let event;
+  try {
+    event = JSON.parse(payload);
+  } catch (error) {
+    addEvent({ phase: "stream", status: "failed", message: `Ignored malformed stream event: ${error.message}` });
+    return;
+  }
+
   if (event.type === "complete") {
     updatePhase(event.phase, "complete", event.message);
     addEvent(event);
@@ -182,8 +218,9 @@ function handleStreamChunk(chunk) {
   renderPartialEvent(event);
 }
 
+
 async function checkConfig() {
-  setLoading(true);
+  setConfigChecking(true);
   try {
     const data = await getJson(routes.configCheck);
     renderConfig(data);
@@ -191,9 +228,9 @@ async function checkConfig() {
     updatePhase("config", "complete", data.local_test_ready ? "Local testing is ready." : "Configuration needs attention.");
     addEvent({ phase: "config", status: "complete", message: "Configuration check completed." });
   } catch (error) {
-    renderError(error);
+    renderError(error, "config");
   } finally {
-    setLoading(false);
+    setConfigChecking(false);
     renderIcons();
   }
 }
@@ -219,6 +256,7 @@ function readPayload() {
 
 function resetRun(payload) {
   state.events = [];
+  state.logLines = [];
   state.activePhaseKey = null;
   state.runStartedAt = Date.now();
   state.lastEventAt = Date.now();
@@ -227,12 +265,15 @@ function resetRun(payload) {
   renderPhases();
   renderPipelineMap();
   renderEventFeed();
+  renderLogStream();
   setMetricsEmpty();
   setEmpty("dagView", "The PM agent will render the task graph here.");
   setEmpty("ticketView", "The meeting agent will render extracted tickets here.");
   setEmpty("timelineView", "Execution events will appear as agents complete work.");
   setEmpty("debateView", "Debate results will appear after specialist agents score proposals.");
   $("summaryView").textContent = "Running. The manager summary will appear when the final stage completes.";
+  addLogLine({ phase: "system", status: "running", message: "Workflow accepted. Opening server-sent event stream..." });
+  updateLiveAgent();
 }
 
 function renderAll(data) {
@@ -263,15 +304,15 @@ function renderPartialEvent(event) {
 function renderMode(mode) {
   const pill = $("modePill");
   const production = mode === "production";
-  const cloudReady = mode === "cloud";
+  const cloudReady = mode === "cloud" || mode === "free-cloud";
   pill.textContent = production
     ? "Azure production ready"
     : cloudReady
       ? "Cloud stack ready"
       : "Local fallback mode";
   pill.className = production || cloudReady
-    ? "inline-flex min-h-9 items-center rounded-full border border-green/40 bg-green/10 px-3 text-sm font-semibold text-green"
-    : "inline-flex min-h-9 items-center rounded-full border border-amber/40 bg-amber/10 px-3 text-sm font-semibold text-amber";
+    ? "inline-flex min-h-9 items-center gap-2 rounded-full border border-green/40 bg-green/10 px-3 text-sm font-bold text-green shadow-sm"
+    : "inline-flex min-h-9 items-center gap-2 rounded-full border border-amber/40 bg-amber/10 px-3 text-sm font-bold text-amber shadow-sm";
 }
 
 function configMode(config) {
@@ -316,7 +357,7 @@ function renderPromptOverview(payload) {
 
 function promptCard(title, body, icon) {
   return `
-    <div class="min-w-0 rounded-md border border-line bg-[#fbfcfa] p-3">
+    <div class="min-w-0 rounded-2xl border border-line bg-[#fbfcfa] p-3">
       <div class="mb-2 flex items-center gap-2 text-sm font-bold">
         <i data-lucide="${icon}" class="h-4 w-4 text-teal"></i>
         <span>${escapeHtml(title)}</span>
@@ -345,8 +386,8 @@ function renderPhases() {
 function phaseCard(phase) {
   const styles = statusStyles(phase.status);
   return `
-    <div class="grid grid-cols-[32px_minmax(0,1fr)] gap-3 rounded-md border ${styles.border} ${styles.bg} p-2.5">
-      <span class="flex h-8 w-8 items-center justify-center rounded-md ${styles.iconBg} ${styles.text}">
+    <div class="mb-2 grid grid-cols-[36px_minmax(0,1fr)] gap-3 rounded-2xl border ${styles.border} ${styles.bg} p-3 last:mb-0">
+      <span class="flex h-9 w-9 items-center justify-center rounded-xl ${styles.iconBg} ${styles.text}">
         <i data-lucide="${phase.icon}" class="h-4 w-4"></i>
       </span>
       <div class="min-w-0">
@@ -366,7 +407,7 @@ function renderPipelineMap() {
       const phase = state.phases[item.key] || { status: "pending" };
       const styles = statusStyles(phase.status);
       return `
-        <div class="min-h-32 rounded-md border ${styles.border} ${styles.bg} p-3">
+        <div class="min-h-32 rounded-2xl border ${styles.border} ${styles.bg} p-3 transition hover:-translate-y-0.5 hover:shadow-soft">
           <div class="flex items-center justify-between gap-2">
             <i data-lucide="${item.icon}" class="h-5 w-5 ${styles.text}"></i>
             <span class="text-xs font-bold uppercase tracking-normal ${styles.text}">${escapeHtml(phase.status)}</span>
@@ -394,6 +435,7 @@ function updatePhase(phaseKey, status, message) {
   }
   renderPhases();
   renderPipelineMap();
+  updateLiveAgent();
 }
 
 function completeEarlierRunningPhases(currentKey, status) {
@@ -416,16 +458,20 @@ function markAllComplete() {
   state.activePhaseKey = "summary";
   renderPhases();
   renderPipelineMap();
+  updateLiveAgent();
 }
 
 function addEvent(event) {
   state.lastEventAt = Date.now();
-  state.events.unshift({
+  const entry = {
     phase: event.phase || "swarm",
     status: normalizeStatus(event.status || "running"),
     message: event.message || "Agent event received.",
     createdAt: new Date().toLocaleTimeString(),
-  });
+    type: event.type || "stage",
+  };
+  state.events.unshift(entry);
+  addLogLine(entry);
   state.events = state.events.slice(0, 80);
   renderEventFeed();
 }
@@ -437,11 +483,14 @@ function startHeartbeat() {
   state.heartbeatTimer = window.setInterval(() => {
     const elapsed = Math.max(1, Math.round((Date.now() - state.runStartedAt) / 1000));
     const sinceEvent = Math.round((Date.now() - state.lastEventAt) / 1000);
-    $("runStatePill").textContent = `Running live stream · ${elapsed}s`;
+    $("runStatePill").innerHTML = `<span class="h-2 w-2 animate-pulse rounded-full bg-teal"></span>Running live stream · ${elapsed}s`;
+    if ($("elapsedTime")) $("elapsedTime").textContent = `${elapsed}s`;
+    if ($("lastSignal")) $("lastSignal").textContent = `${sinceEvent}s ago`;
     const active = state.activePhaseKey ? state.phases[state.activePhaseKey] : null;
     if (active && state.running) {
       const waitText = sinceEvent >= 8 ? ` Still working, last backend event ${sinceEvent}s ago.` : "";
       $("activePhaseLabel").textContent = `${active.label}: ${active.message}${waitText}`;
+      updateLiveAgent(waitText);
     }
   }, 1000);
 }
@@ -454,16 +503,17 @@ function stopHeartbeat() {
 }
 
 function renderEventFeed() {
+  if (!$("eventFeed") || !$("eventCount")) return;
   $("eventCount").textContent = `${state.events.length} event${state.events.length === 1 ? "" : "s"}`;
   if (!state.events.length) {
-    $("eventFeed").innerHTML = `<div class="rounded-md border border-dashed border-line p-3 text-sm text-muted">Run the workflow to see live backend events.</div>`;
+    $("eventFeed").innerHTML = `<div class="rounded-2xl border border-dashed border-line p-3 text-sm text-muted">Run the workflow to see live backend events.</div>`;
     return;
   }
   $("eventFeed").innerHTML = state.events
     .map((event) => {
       const styles = statusStyles(event.status);
       return `
-        <div class="mb-2 rounded-md border ${styles.border} bg-white p-2.5 last:mb-0">
+        <div class="mb-2 rounded-2xl border ${styles.border} bg-white p-3 last:mb-0">
           <div class="flex items-center justify-between gap-2">
             <span class="text-xs font-bold uppercase tracking-normal ${styles.text}">${escapeHtml(event.phase)}</span>
             <span class="text-xs text-muted">${escapeHtml(event.createdAt)}</span>
@@ -512,11 +562,11 @@ function renderTickets(rows) {
 }
 
 function renderTimeline(history) {
-  $("timelineView").className = "grid max-h-[540px] gap-2 overflow-y-auto pr-1";
+  $("timelineView").className = "grid max-h-[34rem] gap-2 overflow-y-auto pr-1";
   $("timelineView").innerHTML = history
     .map(
       (msg) => `
-        <div class="grid gap-3 rounded-md border border-line bg-white p-3 sm:grid-cols-[88px_minmax(0,1fr)_64px] sm:items-center">
+        <div class="grid gap-3 rounded-2xl border border-line bg-white p-3 sm:grid-cols-[88px_minmax(0,1fr)_64px] sm:items-center">
           <span class="${badgeClass(msg.status)}">${escapeHtml(msg.type)}</span>
           <div class="min-w-0">
             <div class="${titleClass}">${escapeHtml(msg.payload.title || "Agent event")}</div>
@@ -573,16 +623,97 @@ function renderConfig(config) {
     .join("");
 }
 
-function renderError(error) {
+function renderError(error, phase = "swarm") {
+  const wasRunning = state.running;
   setLoading(false);
-  updatePhase("swarm", "failed", error.message);
-  addEvent({ phase: "error", status: "failed", message: error.message });
-  $("summaryView").textContent = `Workflow failed:\n${error.message}`;
+  const phaseKey = state.phases[phase] ? phase : "swarm";
+  updatePhase(phaseKey, "failed", error.message);
+  addEvent({ phase: phaseKey, status: "failed", message: error.message });
+  const title = phaseKey === "config" && !wasRunning ? "Configuration check failed" : "Workflow failed";
+  $("summaryView").textContent = `${title}:\n${error.message}`;
+}
+
+function addLogLine(event) {
+  const phase = event.phase || "swarm";
+  const status = normalizeStatus(event.status || "running");
+  const timestamp = event.createdAt || new Date().toLocaleTimeString();
+  const prefix = status === "complete" ? "✓" : status === "failed" ? "!" : "→";
+  state.logLines.push({
+    phase,
+    status,
+    timestamp,
+    message: event.message || "Agent event received.",
+    prefix,
+  });
+  state.logLines = state.logLines.slice(-160);
+  renderLogStream();
+}
+
+function renderLogStream() {
+  if (!$("liveLogStream")) return;
+  if (!state.logLines.length) {
+    $("liveLogStream").innerHTML = `<div class="text-slate-500">$ waiting for agent stream...</div>`;
+    if ($("liveLogCount")) $("liveLogCount").textContent = "0 lines";
+    return;
+  }
+  $("liveLogStream").innerHTML = state.logLines
+    .map((line) => {
+      const color = line.status === "complete" ? "text-emerald-300" : line.status === "failed" ? "text-rose-300" : "text-cyan-200";
+      return `<div class="mb-2 rounded-xl border border-white/5 bg-white/[0.03] p-2 sm:grid sm:grid-cols-[74px_18px_112px_minmax(0,1fr)] sm:gap-2">
+        <span class="mr-2 text-slate-500">${escapeHtml(line.timestamp)}</span>
+        <span class="mr-2 ${color}">${escapeHtml(line.prefix)}</span>
+        <span class="mr-2 inline-block max-w-full truncate uppercase tracking-wide ${color}">${escapeHtml(line.phase)}</span>
+        <span class="block break-words text-slate-200 sm:inline">${escapeHtml(line.message)}</span>
+      </div>`;
+    })
+    .join("");
+  if ($("liveLogCount")) $("liveLogCount").textContent = `${state.logLines.length} line${state.logLines.length === 1 ? "" : "s"}`;
+  $("liveLogStream").scrollTop = $("liveLogStream").scrollHeight;
+}
+
+function updateLiveAgent(extraMessage = "") {
+  if (!$("activeAgentName")) return;
+  const values = phaseDefinitions.map((phase) => state.phases[phase.key]).filter(Boolean);
+  const active =
+    (state.activePhaseKey && state.phases[state.activePhaseKey]) ||
+    values.find((phase) => phase.status === "running") ||
+    [...values].reverse().find((phase) => isComplete(phase.status));
+  const phase = active || { label: "Waiting for run", message: "Start a workflow to watch agent status and backend events stream in real time.", icon: "bot", status: "pending" };
+  $("activeAgentName").textContent = phase.label;
+  $("activeAgentMessage").textContent = `${phase.message || phase.detail || "Agent activity is pending."}${extraMessage}`;
+  $("currentPhaseMini").innerHTML = `<span class="h-2 w-2 rounded-full ${state.running ? "animate-pulse bg-teal" : isComplete(phase.status) ? "bg-green" : "bg-slate-400"}" id="heartbeatDot"></span>${escapeHtml(phase.status || "idle")}`;
+  if ($("activeAgentIcon")) $("activeAgentIcon").setAttribute("data-lucide", phase.icon || "bot");
+  if ($("elapsedTime")) {
+    const elapsed = state.runStartedAt ? Math.round((Date.now() - state.runStartedAt) / 1000) : 0;
+    $("elapsedTime").textContent = `${Math.max(0, elapsed)}s`;
+  }
+  if ($("lastSignal")) {
+    const last = state.lastEventAt ? `${Math.max(0, Math.round((Date.now() - state.lastEventAt) / 1000))}s ago` : "--";
+    $("lastSignal").textContent = last;
+  }
+  renderIcons();
 }
 
 function setEmpty(id, text) {
   $(id).className = emptyClass;
   $(id).textContent = text;
+}
+
+function requestHeaders(includeContentType = true) {
+  const headers = includeContentType ? { "Content-Type": "application/json" } : {};
+  const apiKey = document.body.dataset.apiKey || storedApiKey();
+  if (apiKey) {
+    headers["x-hivemind-api-key"] = apiKey;
+  }
+  return headers;
+}
+
+function storedApiKey() {
+  try {
+    return window.localStorage?.getItem("hivemindApiKey") || "";
+  } catch (_error) {
+    return "";
+  }
 }
 
 function apiUrl(path) {
@@ -595,7 +726,7 @@ function itemAccent(index) {
 
 function badgeClass(status) {
   const styles = statusStyles(status);
-  return `inline-flex min-h-7 items-center justify-center rounded-full px-2.5 text-xs font-bold uppercase tracking-normal ${styles.bg} ${styles.text}`;
+  return `inline-flex min-h-7 items-center justify-center rounded-full px-2.5 text-xs font-black uppercase tracking-normal ${styles.bg} ${styles.text}`;
 }
 
 function statusStyles(status) {
@@ -643,6 +774,8 @@ initPhaseState();
 renderPhases();
 renderPipelineMap();
 renderEventFeed();
+renderLogStream();
+updateLiveAgent();
 setMetricsEmpty();
 $("goalInput").addEventListener("input", () => renderPromptOverview(readPayload()));
 $("transcriptInput").addEventListener("input", () => renderPromptOverview(readPayload()));
